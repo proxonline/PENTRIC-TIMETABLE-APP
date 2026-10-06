@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: #f1f5f9; /* Slate-100 */
+  color: #0f172a; /* Slate-900 */
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  body {
+    background: white;
+  }
+  /* Ensure background colors print */
+  -webkit-print-color-adjust: exact; 
+  print-color-adjust: exact;
+}
+
+.print-only {
+  display: none;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #e2e8f0; 
+}
+::-webkit-scrollbar-thumb {
+  background: #94a3b8; 
+  border-radius: 5px;
+  border: 2px solid #e2e8f0;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #64748b; 
+}
+
+/* Utilities */
+.writing-mode-vertical {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+}

@@ -1,0 +1,8 @@
+{
+  "name": "OTA Smart Timetable",
+  "description": "An intelligent, constraint-based academic timetable generation system for schools, featuring AI reasoning, strict conflict resolution, and role-based access.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

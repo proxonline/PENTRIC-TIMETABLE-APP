@@ -1,0 +1,5224 @@
+
+        
+You are working on an EXISTING school timetable application.
+
+ 
+
+The application has already been developed and tested over a long period of time. It contains important existing functionality, data, database relationships, authentication, timetable logic, scheduling logic, teacher/admin workflows, and other systems that must NOT be casually rewritten.
+
+ 
+
+Your task is to turn the existing application into the final professional production version called:
+
+ 
+
+PENTRIC
+
+ 
+
+Created by:
+
+ 
+
+PPF Innovations and Technology Group
+
+ 
+
+IMPORTANT:
+
+ 
+
+This is NOT a request to rebuild the application from scratch.
+
+ 
+
+This is NOT a request to replace the existing timetable engine.
+
+ 
+
+This is NOT a request to redesign the entire architecture.
+
+ 
+
+This is NOT a request to create a new database.
+
+ 
+
+This is NOT a request to replace working systems with new implementations.
+
+ 
+
+The existing application is the foundation.
+
+ 
+
+Your job is to carefully inspect what already exists, clean it up, remove unfinished/testing features, fix only confirmed problems, improve usability, add the requested documentation/about sections, and make the application production-ready WITHOUT damaging the existing working functionality.
+
+ 
+
+STABILITY IS THE HIGHEST PRIORITY.
+
+ 
+
+If there is ever a conflict between a requested cosmetic improvement and preserving working functionality, preserve the working functionality.
+
+ 
+
+If a change would require a risky rewrite of core logic, DO NOT make that change.
+
+ 
+
+==================================================
+
+ 
+
+1. FINAL PRODUCT NAME
+
+   ==================================================
+
+ 
+
+The final visible product name should be:
+
+ 
+
+Pentric
+
+ 
+
+Where appropriate, update user-facing branding from the old school-specific/product branding to Pentric.
+
+ 
+
+This includes appropriate:
+
+ 
+
+- Window titles
+
+- Application titles
+
+- Main headings
+
+- Login branding
+
+- Dashboard branding
+
+- About section
+
+- Help/User Guide
+
+- Other visible product branding
+
+ 
+
+However:
+
+ 
+
+DO NOT rename internal database tables, internal variables, internal classes, functions, IDs, or other internal architecture merely for branding purposes if doing so creates risk.
+
+ 
+
+The internal implementation can retain old names where necessary.
+
+ 
+
+Only the USER-FACING branding needs to become Pentric.
+
+ 
+
+==================================================
+
+2. VERY IMPORTANT — DO NOT REBUILD THE CORE
+
+ 
+
+The existing application's core systems are considered protected.
+
+ 
+
+DO NOT rewrite, replace, or redesign:
+
+ 
+
+- Timetable generation engine
+
+- Scheduling algorithm
+
+- Period allocation logic
+
+- Day allocation logic
+
+- Teacher/class/subject relationships
+
+- Clash detection
+
+- Teacher clash prevention
+
+- Class clash prevention
+
+- Authentication
+
+- Login system
+
+- Signup system
+
+- Password reset system
+
+- Retrieve/reset codes
+
+- User database relationships
+
+- Existing SQLite/database architecture
+
+- Existing timetable storage
+
+- Existing admin/teacher workflows
+
+- Create Persona
+
+- Generate Timetable
+
+- Timetable display
+
+- Timetable editing
+
+- Back navigation
+
+- Existing school management
+
+- Existing class management
+
+- Existing subject management
+
+- Existing teacher management
+
+- Existing school deletion
+
+- Existing data relationships
+
+ 
+
+These systems already represent substantial development work.
+
+ 
+
+Do not replace them with a new architecture simply because another approach may appear cleaner.
+
+ 
+
+Do not introduce:
+
+ 
+
+- A new database
+
+- A new authentication architecture
+
+- A new timetable algorithm
+
+- A new scheduling engine
+
+- A new framework
+
+- A new API architecture
+
+- Multi-tenant SaaS architecture
+
+- Cloud migration
+
+- Server architecture
+
+- Unnecessary external dependencies
+
+ 
+
+unless the existing application absolutely requires one of these for a confirmed bug.
+
+ 
+
+The goal is to make the EXISTING application safer and cleaner, not to start a new project.
+
+ 
+
+==================================================
+
+3. BEFORE CHANGING ANYTHING — INSPECT THE EXISTING APP
+
+ 
+
+Before making modifications, inspect the existing project carefully.
+
+ 
+
+Understand:
+
+ 
+
+- Project structure
+
+- Entry point
+
+- Screens/pages
+
+- Navigation
+
+- Database structure
+
+- Authentication
+
+- Admin workflow
+
+- Teacher workflow
+
+- Timetable generation
+
+- Timetable editing
+
+- School management
+
+- Class management
+
+- Subject management
+
+- Teacher management
+
+- Settings
+
+- Profile system
+
+- Existing Delete School feature
+
+- Existing help/tutorial possibilities
+
+- Existing branding
+
+- Existing hard-coded school information
+
+- Existing test/development features
+
+ 
+
+Do not assume something is missing just because it is not immediately visible.
+
+ 
+
+Search the codebase before implementing anything.
+
+ 
+
+If a requested feature already exists, improve or expose the existing implementation rather than creating a duplicate.
+
+ 
+
+If an existing Delete School feature already exists, DO NOT create another Delete School feature.
+
+ 
+
+==================================================
+
+4. REMOVE TESTING / DEVELOPMENT-ONLY FEATURES
+
+ 
+
+The final production application must NOT expose testing/development-only features.
+
+ 
+
+Remove the following:
+
+ 
+
+1. ROM
+
+2. Venue Exams
+
+3. Bulk Import
+
+4. Analytics
+
+ 
+
+These are not required in the final production version.
+
+ 
+
+Remove their:
+
+ 
+
+- Navigation entries
+
+- Buttons
+
+- Pages
+
+- Tabs
+
+- Routes
+
+- Menus
+
+- Unnecessary dialogs
+
+- Testing-only UI
+
+- Development-only references
+
+- Dead code where it can be safely removed
+
+ 
+
+However, do NOT blindly delete shared code.
+
+ 
+
+Before removing code, determine whether it is used by another legitimate core feature.
+
+ 
+
+If a piece of code is shared by the actual timetable system, preserve it.
+
+ 
+
+The goal is to remove the USER-FACING testing/development functionality without accidentally breaking the real timetable system.
+
+ 
+
+==================================================
+
+5. REMOVE FAKE, DEAD, OR UNFINISHED CONTROLS
+
+ 
+
+Perform a full application audit.
+
+ 
+
+Inspect EVERY:
+
+ 
+
+- Button
+
+- Checkbox
+
+- Toggle
+
+- Dropdown
+
+- Input
+
+- Menu item
+
+- Navigation item
+
+- Tab
+
+- Dialog
+
+- Settings option
+
+- Action
+
+- Page
+
+- Route
+
+- Icon action
+
+- Link
+
+- Switch
+
+- Form submission
+
+- Save action
+
+- Cancel action
+
+ 
+
+For each one, determine:
+
+ 
+
+Does it actually do what its label says?
+
+ 
+
+If YES:
+
+Keep it.
+
+ 
+
+If NO:
+
+Determine whether it is:
+
+ 
+
+- Fake
+
+- Unfinished
+
+- Dead
+
+- Testing-only
+
+- Placeholder
+
+- Non-functional
+
+- A developer-only control
+
+- A feature that was started but never completed
+
+ 
+
+If it is not essential to the core application and does not work:
+
+ 
+
+REMOVE IT.
+
+ 
+
+Do NOT invent a new implementation just to make a useless feature appear functional.
+
+ 
+
+For example:
+
+ 
+
+If there is an "Enable Saturday Classes" setting but the timetable system does not actually support Saturday scheduling, REMOVE the setting.
+
+ 
+
+Do NOT build Saturday scheduling just because the checkbox exists.
+
+ 
+
+If there is a button saying "Export" but it does nothing and export is not a required core feature, remove it.
+
+ 
+
+If there is a fake technical setting that has no real effect, remove it.
+
+ 
+
+The final application should contain only controls that actually work or are genuinely useful.
+
+ 
+
+==================================================
+
+6. REMOVE UNNECESSARY SCHOOL-SPECIFIC HARD-CODING
+
+ 
+
+The application should not unnecessarily depend on one particular school's data being hard-coded into the source code.
+
+ 
+
+Inspect the project for hard-coded:
+
+ 
+
+- School names
+
+- Classes
+
+- Subjects
+
+- Teachers
+
+- Timetable entries
+
+- School-specific configuration
+
+- School-specific labels
+
+- School-specific lists
+
+ 
+
+If the information is supposed to be created or managed by the administrator through the application, it should preferably come from the existing database/configuration system.
+
+ 
+
+For example:
+
+ 
+
+Classes should come from the application's existing class management/data system.
+
+ 
+
+Subjects should come from the existing subject management/data system.
+
+ 
+
+Teachers should come from the existing teacher management/data system.
+
+ 
+
+School information should come from the existing school configuration/data system where one already exists.
+
+ 
+
+IMPORTANT:
+
+ 
+
+Do NOT redesign the database.
+
+ 
+
+Do NOT create a multi-school SaaS architecture.
+
+ 
+
+Do NOT replace SQLite.
+
+ 
+
+Do NOT migrate the entire system unnecessarily.
+
+ 
+
+Do NOT wipe existing data.
+
+ 
+
+Do NOT change primary keys unnecessarily.
+
+ 
+
+Do NOT change relationships unnecessarily.
+
+ 
+
+Use the existing architecture wherever possible.
+
+ 
+
+The purpose is simply to stop the application from unnecessarily depending on hard-coded school-specific information when the application already has a proper place for that information.
+
+ 
+
+Existing Ota Total Academy data must remain safe.
+
+ 
+
+If migration is genuinely required, perform it safely without deleting existing records.
+
+ 
+
+==================================================
+
+7. ADMIN NAVIGATION CLEANUP
+
+ 
+
+The Admin interface currently contains too many individual navigation items.
+
+ 
+
+Make the navigation cleaner and more professional by grouping related existing functionality.
+
+ 
+
+Use expandable/collapsible sections.
+
+ 
+
+For example:
+
+ 
+
+School Management ▾
+
+ 
+
+- School
+
+- Classes
+
+- Subjects
+
+- Teachers
+
+ 
+
+Timetable ▾
+
+ 
+
+- Existing timetable-related features
+
+ 
+
+Settings ▾
+
+ 
+
+- Existing settings
+
+ 
+
+The exact grouping should be based on the ACTUAL existing application.
+
+ 
+
+Do not create duplicate pages.
+
+ 
+
+Do not remove real functionality simply because it is being grouped.
+
+ 
+
+The goal is:
+
+ 
+
+FEWER CLUTTERED TOP-LEVEL ITEMS.
+
+ 
+
+MORE ORGANIZED NAVIGATION.
+
+ 
+
+Keep important actions easy to find.
+
+ 
+
+The expandable sections should work properly.
+
+ 
+
+Clicking the parent section should expand/collapse its children where appropriate.
+
+ 
+
+Do not create fake expandable sections that do nothing.
+
+ 
+
+==================================================
+
+8. TEACHER INTERFACE CLEANUP
+
+ 
+
+The Teacher interface should also be clean and focused.
+
+ 
+
+Teachers should see the functionality that is actually relevant to them.
+
+ 
+
+Remove:
+
+ 
+
+- Development controls
+
+- Testing controls
+
+- Fake settings
+
+- Unfinished features
+
+- Technical database controls
+
+- Internal IDs
+
+- Debug controls
+
+- Unnecessary developer terminology
+
+ 
+
+Preserve the real teacher workflow.
+
+ 
+
+The teacher should still be able to:
+
+ 
+
+- Log in
+
+- Access their dashboard
+
+- Manage/view their profile as currently supported
+
+- Create Persona
+
+- Select classes
+
+- Select subjects
+
+- Select days
+
+- Select periods
+
+- Generate their timetable
+
+- View their timetable
+
+- Edit the timetable where the existing application supports it
+
+- Navigate back
+
+- Use legitimate existing teacher functions
+
+ 
+
+Do not remove any working core teacher functionality.
+
+ 
+
+==================================================
+
+9. PROTECT THE EXISTING TIMETABLE ENGINE
+
+ 
+
+This is one of the most important requirements.
+
+ 
+
+DO NOT rewrite the timetable generation algorithm.
+
+ 
+
+DO NOT replace the scheduling engine.
+
+ 
+
+DO NOT change its behavior unless a specific confirmed bug is found.
+
+ 
+
+Preserve existing rules such as:
+
+ 
+
+- Monday–Friday scheduling
+
+- Existing periods
+
+- Existing class structure
+
+- Existing subject relationships
+
+- Existing teacher relationships
+
+- Existing timetable allocation
+
+- Existing clash prevention
+
+- Existing clash detection
+
+- Existing constraints
+
+ 
+
+The application currently has timetable logic involving periods such as:
+
+ 
+
+8:05–8:45
+
+8:45–9:25
+
+9:25–10:05
+
+10:05–10:45
+
+10:45–11:25
+
+11:25–12:05
+
+12:05–12:45
+
+12:45–1:25
+
+1:25–2:10
+
+ 
+
+Do not alter these unless the existing application itself already handles them differently.
+
+ 
+
+Existing rules such as Maths and English being allocated within the appropriate existing periods must remain intact.
+
+ 
+
+Do not introduce doubles if the existing system prohibits doubles.
+
+ 
+
+Do not introduce Saturday scheduling.
+
+ 
+
+Do not alter clash rules.
+
+ 
+
+==================================================
+
+10. PROTECT CLASH DETECTION
+
+ 
+
+Preserve the existing clash detection/prevention system.
+
+ 
+
+The application must continue preventing or detecting situations such as:
+
+ 
+
+Teacher A being assigned to two classes at the same day and period.
+
+ 
+
+A class being assigned two teachers/subjects at the same day and period.
+
+ 
+
+Teacher/class/subject relationships being incorrectly duplicated.
+
+ 
+
+Do not replace the existing clash detection system with a new algorithm.
+
+ 
+
+If you discover a confirmed bug, make the smallest isolated correction possible.
+
+ 
+
+Test the affected scenario after making the change.
+
+ 
+
+==================================================
+
+11. PROTECT AUTHENTICATION
+
+ 
+
+Do NOT rewrite authentication.
+
+ 
+
+Preserve:
+
+ 
+
+- Admin login
+
+- Teacher login
+
+- Sign Up
+
+- Password
+
+- Confirm password
+
+- Retrieve/reset code
+
+- Password reset
+
+- Existing authentication database records
+
+- Existing user relationships
+
+ 
+
+Do not wipe users.
+
+ 
+
+Do not create a new login system.
+
+ 
+
+Do not change password storage unless there is a clearly confirmed security problem requiring it.
+
+ 
+
+Do not break existing accounts.
+
+ 
+
+==================================================
+
+12. EXISTING DELETE SCHOOL FEATURE
+
+ 
+
+IMPORTANT:
+
+ 
+
+The application already contains a Delete School feature.
+
+ 
+
+DO NOT add another Delete School feature.
+
+ 
+
+DO NOT create duplicate delete buttons.
+
+ 
+
+DO NOT create a second school deletion page.
+
+ 
+
+Leave the existing Delete School implementation intact.
+
+ 
+
+Only inspect it during QA to ensure:
+
+ 
+
+- It is reachable as intended
+
+- It works as intended
+
+- It has an appropriate warning/confirmation
+
+- It does not accidentally trigger from unrelated controls
+
+ 
+
+Do not redesign it unnecessarily.
+
+ 
+
+==================================================
+
+13. DATABASE SAFETY
+
+ 
+
+Database safety is extremely important.
+
+ 
+
+The existing database contains valuable application data.
+
+ 
+
+DO NOT:
+
+ 
+
+- Delete the database
+
+- Recreate the database unnecessarily
+
+- Reset the database
+
+- Wipe users
+
+- Wipe teachers
+
+- Wipe classes
+
+- Wipe subjects
+
+- Wipe timetable data
+
+- Change IDs unnecessarily
+
+- Change primary keys unnecessarily
+
+- Break foreign-key relationships
+
+- Replace the database system
+
+ 
+
+If schema modification is absolutely necessary for a confirmed bug, make the smallest compatible change possible.
+
+ 
+
+Existing data must survive the update.
+
+ 
+
+The application must continue working with the existing database.
+
+ 
+
+Do not use destructive migration commands.
+
+ 
+
+Do not create startup code that resets the database.
+
+ 
+
+==================================================
+
+14. IMPORTANT BUG — TEACHER PROFILE PICTURE
+
+ 
+
+There is a confirmed existing issue.
+
+ 
+
+A teacher can upload/change their profile picture.
+
+ 
+
+The teacher sees the new picture on their own screen.
+
+ 
+
+However, the Admin Teacher tab does NOT show the updated profile picture.
+
+ 
+
+This must be investigated and fixed.
+
+ 
+
+DO NOT assume the cause.
+
+ 
+
+Inspect the actual implementation first.
+
+ 
+
+Determine whether the problem is caused by:
+
+ 
+
+- Image path not being persisted
+
+- Image being stored only in temporary/local UI state
+
+- Database field not being updated
+
+- Wrong database field
+
+- Wrong teacher record being updated
+
+- Admin reading a different field
+
+- Admin using stale teacher data
+
+- Incorrect file path
+
+- Relative path problem
+
+- Absolute path problem
+
+- Cache
+
+- UI refresh problem
+
+- Page navigation not reloading teacher data
+
+- Application restart losing the image reference
+
+- Teacher ID mismatch
+
+- Profile image being associated with the wrong teacher
+
+ 
+
+After identifying the actual cause, make the SMALLEST SAFE FIX.
+
+ 
+
+The final behavior must be:
+
+ 
+
+Teacher uploads profile picture.
+
+ 
+
+↓
+
+ 
+
+Teacher immediately sees the updated picture.
+
+ 
+
+↓
+
+ 
+
+Teacher leaves the page and returns.
+
+ 
+
+↓
+
+ 
+
+The picture is still there.
+
+ 
+
+↓
+
+ 
+
+Admin opens the Teacher tab.
+
+ 
+
+↓
+
+ 
+
+Admin sees the correct teacher's profile picture.
+
+ 
+
+↓
+
+ 
+
+Application restarts.
+
+ 
+
+↓
+
+ 
+
+The correct profile picture remains available.
+
+ 
+
+↓
+
+ 
+
+Another teacher NEVER sees the wrong teacher's profile picture.
+
+ 
+
+The fix must persist the picture correctly.
+
+ 
+
+Do not rewrite the entire teacher system.
+
+ 
+
+Do not rewrite authentication.
+
+ 
+
+Do not redesign the database.
+
+ 
+
+Do not change unrelated teacher profile fields.
+
+ 
+
+Do not create a new profile system.
+
+ 
+
+Only fix the actual persistence/retrieval/display issue.
+
+ 
+
+Test multiple teachers to ensure one teacher's image never appears on another teacher's record.
+
+ 
+
+==================================================
+
+15. PROFESSIONAL ABOUT PENTRIC SECTION
+
+ 
+
+Add a professional "About Pentric" section.
+
+ 
+
+It can be placed under Settings or as a separate appropriate section/tab, depending on the existing UI.
+
+ 
+
+It should explain what Pentric is.
+
+ 
+
+It should include:
+
+ 
+
+Pentric is a school timetable management system designed to help schools organize and manage their timetable operations in a structured and practical way.
+
+ 
+
+It should clearly state:
+
+ 
+
+"Created by PPF Innovations and Technology Group."
+
+ 
+
+It should also communicate that the application represents significant work involving:
+
+ 
+
+- Planning
+
+- Development
+
+- Testing
+
+- Problem-solving
+
+- Refinement
+
+- Repeated improvement
+
+- Careful attention to functionality
+
+ 
+
+It should communicate that the project took substantial time and effort and has now reached a completed production-ready stage.
+
+ 
+
+Do NOT invent:
+
+ 
+
+- Exact development duration
+
+- Exact number of developers
+
+- Exact number of hours
+
+- Exact financial cost
+
+- Fake awards
+
+- Fake partnerships
+
+- Fake statistics
+
+- Fake clients
+
+- Fake achievements
+
+ 
+
+Keep it genuine and professional.
+
+ 
+
+The message should feel like a real software company's About section, not exaggerated marketing.
+
+ 
+
+It should communicate:
+
+ 
+
+"This application took considerable planning, development, testing, problem-solving, and refinement. After extensive work, Pentric has now been completed and prepared for real-world use."
+
+ 
+
+Make the section visually professional and consistent with the existing application.
+
+ 
+
+==================================================
+
+16. BUILT-IN HELP / USER GUIDE
+
+ 
+
+Add a built-in Help / User Guide section.
+
+ 
+
+It should be accessible from an appropriate location, preferably:
+
+ 
+
+Settings → Help / User Guide
+
+ 
+
+or another clearly visible location that fits the existing application.
+
+ 
+
+Do NOT create a separate external website just for this.
+
+ 
+
+The help system should exist inside the application.
+
+ 
+
+It should contain two major guides:
+
+ 
+
+1. Administrator Guide
+
+2. Teacher Guide
+
+ 
+
+The guide must describe the ACTUAL FINAL APPLICATION.
+
+ 
+
+Do not document features that have been removed.
+
+ 
+
+Do not document imaginary functionality.
+
+ 
+
+Do not mention ROM.
+
+ 
+
+Do not mention Venue Exams.
+
+ 
+
+Do not mention Bulk Import.
+
+ 
+
+Do not mention Analytics.
+
+ 
+
+Do not document features that do not exist.
+
+ 
+
+==================================================
+
+17. ADMINISTRATOR GUIDE
+
+ 
+
+The Administrator Guide should explain, in simple language, how to use the application.
+
+ 
+
+It should cover the actual available functionality, including where appropriate:
+
+ 
+
+1. Logging into the administrator account
+
+ 
+
+2. Understanding the Admin dashboard
+
+ 
+
+3. Understanding the navigation
+
+ 
+
+4. Using the School Management section
+
+ 
+
+5. Managing school information
+
+ 
+
+6. Managing classes
+
+ 
+
+7. Managing subjects
+
+ 
+
+8. Managing teachers
+
+ 
+
+9. Creating and managing timetable information
+
+ 
+
+10. Generating/managing the timetable
+
+ 
+
+11. Understanding timetable periods
+
+ 
+
+12. Understanding teacher/class/subject relationships
+
+ 
+
+13. Understanding clash prevention
+
+ 
+
+14. Editing timetable information where supported
+
+ 
+
+15. Using Settings
+
+ 
+
+16. Using the existing Delete School feature
+
+ 
+
+17. Important warnings before deleting a school
+
+ 
+
+18. Using About Pentric
+
+ 
+
+19. Using Help / User Guide
+
+ 
+
+20. Basic troubleshooting
+
+ 
+
+The guide should explain things in normal school-user language.
+
+ 
+
+Do not use unnecessary developer terms such as:
+
+ 
+
+- Database schema
+
+- SQL query
+
+- Foreign key
+
+- API endpoint
+
+- Object instance
+
+- Backend state
+
+ 
+
+unless absolutely necessary.
+
+ 
+
+A school administrator should be able to read the guide without programming knowledge.
+
+ 
+
+==================================================
+
+18. TEACHER GUIDE
+
+ 
+
+The Teacher Guide should explain:
+
+ 
+
+1. How to log in
+
+ 
+
+2. Understanding the Teacher dashboard
+
+ 
+
+3. Accessing the teacher profile
+
+ 
+
+4. Uploading/changing profile picture if supported
+
+ 
+
+5. Using Create Persona
+
+ 
+
+6. Selecting classes
+
+ 
+
+7. Selecting subjects
+
+ 
+
+8. Selecting the appropriate day
+
+ 
+
+9. Selecting periods
+
+ 
+
+10. Generating the timetable
+
+ 
+
+11. Understanding the generated timetable
+
+ 
+
+12. Understanding "No Class"
+
+ 
+
+13. Editing the timetable if the final application supports editing
+
+ 
+
+14. Going back to previous screens
+
+ 
+
+15. Common problems and what to do
+
+ 
+
+Again:
+
+ 
+
+Keep it simple.
+
+ 
+
+The guide should be written for teachers, not developers.
+
+ 
+
+==================================================
+
+19. HELP CONTENT MUST MATCH REAL FUNCTIONALITY
+
+ 
+
+Before writing the guides, inspect the actual final application.
+
+ 
+
+Do NOT blindly write a generic tutorial.
+
+ 
+
+The instructions must match:
+
+ 
+
+- Actual screen names
+
+- Actual buttons
+
+- Actual navigation
+
+- Actual workflow
+
+- Actual teacher process
+
+- Actual admin process
+
+ 
+
+If the application calls something "Create Persona", use that exact terminology.
+
+ 
+
+If a feature does not exist, do not document it.
+
+ 
+
+If a feature was removed, do not mention it.
+
+ 
+
+If the actual UI behaves differently from the assumptions in this prompt, follow the actual working application.
+
+ 
+
+==================================================
+
+20. USER-FRIENDLY LANGUAGE
+
+ 
+
+The final application should be understandable to normal users.
+
+ 
+
+Avoid exposing:
+
+ 
+
+- Database IDs
+
+- Developer IDs
+
+- Debug information
+
+- Internal object names
+
+- File paths
+
+- Technical implementation details
+
+- SQL terminology
+
+- Developer-only controls
+
+- Testing controls
+
+ 
+
+Use simple labels.
+
+ 
+
+For example:
+
+ 
+
+Instead of exposing:
+
+ 
+
+teacher_id = 17
+
+ 
+
+show:
+
+ 
+
+Teacher Name
+
+ 
+
+Instead of:
+
+ 
+
+Database Record
+
+ 
+
+show:
+
+ 
+
+Teacher Information
+
+ 
+
+Instead of:
+
+ 
+
+Debug
+
+ 
+
+remove it if it is not needed.
+
+ 
+
+==================================================
+
+21. PRODUCTION UI CLEANUP
+
+ 
+
+Inspect the entire visual interface.
+
+ 
+
+The application should look like a finished product.
+
+ 
+
+Look for:
+
+ 
+
+- Empty pages
+
+- Broken spacing
+
+- Duplicate buttons
+
+- Unnecessary buttons
+
+- Misleading labels
+
+- Developer text
+
+- Test labels
+
+- Debug information
+
+- Broken icons
+
+- Missing icons
+
+- Incorrect navigation
+
+- Inconsistent headings
+
+- Unnecessary technical information
+
+- Pages that no longer have a purpose
+
+ 
+
+Clean these carefully.
+
+ 
+
+Do not completely redesign the UI.
+
+ 
+
+Do not replace the application's established visual identity unless necessary.
+
+ 
+
+The goal is:
+
+ 
+
+Same application.
+
+ 
+
+Cleaner.
+
+ 
+
+More professional.
+
+ 
+
+More understandable.
+
+ 
+
+More production-ready.
+
+ 
+
+==================================================
+
+22. DO NOT ADD UNNECESSARY FEATURES
+
+ 
+
+Do not add random new features.
+
+ 
+
+Do not turn this into a large SaaS platform.
+
+ 
+
+Do not add:
+
+ 
+
+- AI timetable generation
+
+- Chatbot
+
+- Analytics dashboard
+
+- Saturday scheduling
+
+- Exam venue management
+
+- Bulk import
+
+- ROM
+
+- Payment system
+
+- Subscription system
+
+- Cloud sync
+
+- Multi-tenant architecture
+
+- Messaging
+
+- Notifications
+
+- Unrequested reports
+
+- Unrequested exports
+
+- Unrequested integrations
+
+ 
+
+The application is already feature-rich enough.
+
+ 
+
+The purpose of this task is FINALIZATION.
+
+ 
+
+==================================================
+
+23. NAVIGATION QA
+
+ 
+
+Test the navigation thoroughly.
+
+ 
+
+For every page:
+
+ 
+
+Open it.
+
+ 
+
+Check that it loads.
+
+ 
+
+Check its buttons.
+
+ 
+
+Check its controls.
+
+ 
+
+Check its navigation.
+
+ 
+
+Check Back buttons.
+
+ 
+
+Check Close buttons.
+
+ 
+
+Check Save buttons.
+
+ 
+
+Check Cancel buttons.
+
+ 
+
+Check forms.
+
+ 
+
+Check dialogs.
+
+ 
+
+Check that navigation does not accidentally open the wrong page.
+
+ 
+
+Check that pages do not become inaccessible.
+
+ 
+
+Check that removing test features does not leave broken navigation.
+
+ 
+
+Check that there are no routes pointing to deleted pages.
+
+ 
+
+Check that there are no menu items pointing to removed functionality.
+
+ 
+
+==================================================
+
+24. APPLICATION STARTUP QA
+
+ 
+
+Test the application from a fresh startup.
+
+ 
+
+Check for:
+
+ 
+
+- Import errors
+
+- Missing modules
+
+- Undefined functions
+
+- Undefined variables
+
+- Missing files
+
+- Missing assets
+
+- Broken database initialization
+
+- Broken UI initialization
+
+- Crashes
+
+- Blank screens
+
+- Broken navigation
+
+ 
+
+The application must start normally.
+
+ 
+
+Do not leave temporary debugging code enabled.
+
+ 
+
+Do not leave console errors that indicate broken functionality.
+
+ 
+
+==================================================
+
+25. TEST AFTER EACH IMPORTANT CHANGE
+
+ 
+
+Do not make dozens of changes and only test at the very end.
+
+ 
+
+After every meaningful modification:
+
+ 
+
+1. Run/check the application.
+
+2. Open the affected screen.
+
+3. Test the affected feature.
+
+4. Check navigation.
+
+5. Check database behavior if applicable.
+
+6. Check that unrelated functionality still works.
+
+ 
+
+If a cleanup change breaks something:
+
+ 
+
+STOP.
+
+ 
+
+Investigate.
+
+ 
+
+If the safest solution is to revert the change:
+
+ 
+
+REVERT IT.
+
+ 
+
+Do not keep a risky change just because it looks cleaner.
+
+ 
+
+==================================================
+
+26. DO NOT CHANGE CORE LOGIC FOR COSMETIC REASONS
+
+ 
+
+Do not modify working logic simply because:
+
+ 
+
+- The code could be shorter.
+
+- The architecture could be cleaner.
+
+- Another framework might be better.
+
+- Another database might be faster.
+
+- A different timetable algorithm might be more elegant.
+
+- You personally prefer another implementation.
+
+ 
+
+The application is being finalized.
+
+ 
+
+Not rebuilt.
+
+ 
+
+==================================================
+
+27. EXISTING DATA MUST SURVIVE
+
+ 
+
+Before making any database-related modification, assume the database contains valuable existing data.
+
+ 
+
+The final version must preserve:
+
+ 
+
+- Existing admin account
+
+- Existing teacher accounts
+
+- Existing teacher information
+
+- Existing classes
+
+- Existing subjects
+
+- Existing timetable information
+
+- Existing school information
+
+- Existing relationships
+
+- Existing profile data
+
+ 
+
+Never use:
+
+ 
+
+DROP DATABASE
+
+ 
+
+or equivalent destructive behavior.
+
+ 
+
+Never initialize a fresh database on every startup.
+
+ 
+
+Never delete existing data just to make a new implementation easier.
+
+ 
+
+==================================================
+
+28. SCHOOL CONFIGURATION
+
+ 
+
+Where school information is supposed to be configurable, make sure the application uses the existing configuration/data rather than unnecessary hard-coded values.
+
+ 
+
+However:
+
+ 
+
+Do not build a completely new school management system.
+
+ 
+
+Use what already exists.
+
+ 
+
+The final product should be capable of being configured for the intended school without requiring a developer to manually edit source code for every normal school-level change.
+
+ 
+
+==================================================
+
+29. PROFILE PICTURE SAFETY
+
+ 
+
+For the profile picture fix, ensure file handling is safe.
+
+ 
+
+A teacher's image must belong only to that teacher.
+
+ 
+
+Do not use a single shared temporary image variable for all teachers.
+
+ 
+
+Do not accidentally overwrite another teacher's picture.
+
+ 
+
+Do not rely only on an in-memory UI object.
+
+ 
+
+Persist the necessary reference using the existing application architecture.
+
+ 
+
+When loading the Admin Teacher tab, retrieve the correct image for the correct teacher.
+
+ 
+
+When loading a teacher profile, retrieve that teacher's own image.
+
+ 
+
+When the application restarts, the correct image should remain available.
+
+ 
+
+If an image file no longer exists, handle that situation gracefully rather than crashing.
+
+ 
+
+==================================================
+
+30. FINAL BRANDING
+
+ 
+
+The final application should consistently present itself as:
+
+ 
+
+Pentric
+
+ 
+
+Created by:
+
+ 
+
+PPF Innovations and Technology Group
+
+ 
+
+Do not randomly mix old product names and Pentric in visible user-facing UI.
+
+ 
+
+However, do not rename internal code unnecessarily.
+
+ 
+
+==================================================
+
+31. FINAL PRODUCTION CHECKLIST
+
+ 
+
+Before considering the project finished, verify all of the following.
+
+ 
+
+BRANDING:
+
+ 
+
+[ ] Pentric is the visible product name.
+
+ 
+
+[ ] PPF Innovations and Technology Group appears correctly in About.
+
+ 
+
+[ ] Old unnecessary visible branding has been cleaned up.
+
+ 
+
+CORE FUNCTIONALITY:
+
+ 
+
+[ ] Admin login works.
+
+ 
+
+[ ] Teacher login works.
+
+ 
+
+[ ] Signup still works.
+
+ 
+
+[ ] Password reset still works.
+
+ 
+
+[ ] Retrieve/reset code still works.
+
+ 
+
+[ ] Existing school management works.
+
+ 
+
+[ ] Existing class management works.
+
+ 
+
+[ ] Existing subject management works.
+
+ 
+
+[ ] Existing teacher management works.
+
+ 
+
+[ ] Existing Delete School works.
+
+ 
+
+[ ] Create Persona works.
+
+ 
+
+[ ] Generate Timetable works.
+
+ 
+
+[ ] Timetable display works.
+
+ 
+
+[ ] Timetable editing works where previously supported.
+
+ 
+
+[ ] Back navigation works.
+
+ 
+
+[ ] Clash detection still works.
+
+ 
+
+[ ] Teacher/class/subject relationships remain correct.
+
+ 
+
+[ ] Existing timetable data remains intact.
+
+ 
+
+REMOVED FEATURES:
+
+ 
+
+[ ] ROM removed.
+
+ 
+
+[ ] Venue Exams removed.
+
+ 
+
+[ ] Bulk Import removed.
+
+ 
+
+[ ] Analytics removed.
+
+ 
+
+[ ] No dead navigation remains for removed features.
+
+ 
+
+[ ] No broken routes remain after removal.
+
+ 
+
+CLEANUP:
+
+ 
+
+[ ] Fake buttons removed.
+
+ 
+
+[ ] Fake toggles removed.
+
+ 
+
+[ ] Dead controls removed.
+
+ 
+
+[ ] Unfinished non-core features removed.
+
+ 
+
+[ ] Technical developer controls removed from normal user UI.
+
+ 
+
+[ ] Unnecessary school-specific hard-coding reduced safely.
+
+ 
+
+[ ] Existing data remains intact.
+
+ 
+
+ADMIN UI:
+
+ 
+
+[ ] Navigation is organized.
+
+ 
+
+[ ] School Management is grouped.
+
+ 
+
+[ ] Timetable functionality is grouped.
+
+ 
+
+[ ] Settings is grouped.
+
+ 
+
+[ ] Expand/collapse sections work.
+
+ 
+
+[ ] No duplicate pages exist.
+
+ 
+
+TEACHER UI:
+
+ 
+
+[ ] Only relevant functionality is visible.
+
+ 
+
+[ ] No testing/development controls remain.
+
+ 
+
+[ ] Create Persona works.
+
+ 
+
+[ ] Generate Timetable works.
+
+ 
+
+[ ] Timetable displays correctly.
+
+ 
+
+PROFILE:
+
+ 
+
+[ ] Teacher can upload profile picture.
+
+ 
+
+[ ] Teacher sees their new picture.
+
+ 
+
+[ ] Picture persists after leaving page.
+
+ 
+
+[ ] Admin sees correct teacher picture.
+
+ 
+
+[ ] Picture persists after restart.
+
+ 
+
+[ ] Different teachers never receive the wrong picture.
+
+ 
+
+ABOUT:
+
+ 
+
+[ ] About Pentric exists.
+
+ 
+
+[ ] PPF Innovations and Technology Group is credited.
+
+ 
+
+[ ] Development effort is described honestly.
+
+ 
+
+[ ] No fake statistics are included.
+
+ 
+
+HELP:
+
+ 
+
+[ ] Help/User Guide exists.
+
+ 
+
+[ ] Administrator Guide exists.
+
+ 
+
+[ ] Teacher Guide exists.
+
+ 
+
+[ ] Guides match the final application.
+
+ 
+
+[ ] Removed features are not documented.
+
+ 
+
+DATABASE:
+
+ 
+
+[ ] Database is not wiped.
+
+ 
+
+[ ] Existing users remain.
+
+ 
+
+[ ] Existing timetable data remains.
+
+ 
+
+[ ] Existing relationships remain.
+
+ 
+
+[ ] No unnecessary schema rewrite was performed.
+
+ 
+
+STARTUP:
+
+ 
+
+[ ] Application starts successfully.
+
+ 
+
+[ ] No missing imports.
+
+ 
+
+[ ] No obvious runtime errors.
+
+ 
+
+[ ] No broken screens.
+
+ 
+
+[ ] No broken routes.
+
+ 
+
+[ ] No debug/test controls exposed.
+
+ 
+
+==================================================
+
+32. CRITICAL DECISION RULE
+
+ 
+
+When uncertain, use this rule:
+
+ 
+
+PRESERVE THE EXISTING WORKING SYSTEM.
+
+ 
+
+Do not "improve" something that already works unless the requested task specifically requires it.
+
+ 
+
+If something is broken:
+
+ 
+
+Find the actual cause.
+
+ 
+
+Fix only the actual cause.
+
+ 
+
+Do not rewrite unrelated code.
+
+ 
+
+If fixing it requires a large architectural change:
+
+ 
+
+STOP.
+
+ 
+
+Do not make the risky change.
+
+ 
+
+Instead, leave the core system untouched.
+
+ 
+
+==================================================
+
+33. FINAL OBJECTIVE
+
+ 
+
+The finished application should feel like the same application that has already been built and tested over a long period of time — NOT like a completely different application.
+
+ 
+
+The difference should be that it is now:
+
+ 
+
+- Cleaner
+
+- More professional
+
+- Easier to understand
+
+- Properly branded as Pentric
+
+- Free of testing/development-only features
+
+- Free of fake/dead controls
+
+- Less cluttered
+
+- Better organized
+
+- Less unnecessarily hard-coded
+
+- Safer
+
+- More stable
+
+- Better documented
+
+- Easier for administrators to use
+
+- Easier for teachers to use
+
+- Equipped with a professional About section
+
+- Equipped with a proper Help/User Guide
+
+- Fixed so teacher profile pictures persist correctly and appear correctly to Admin
+
+- Ready for real-world use
+
+ 
+
+DO NOT introduce unnecessary changes.
+
+ 
+
+DO NOT rebuild the application.
+
+ 
+
+DO NOT rewrite the timetable engine.
+
+ 
+
+DO NOT wipe the database.
+
+ 
+
+DO NOT remove working functionality.
+
+ 
+
+DO NOT create duplicate features.
+
+ 
+
+DO NOT invent features.
+
+ 
+
+DO NOT turn this into a new architecture.
+
+ 
+
+Make the smallest safe changes necessary to deliver a polished final production version.
+
+ 
+
+The priority is:
+
+ 
+
+1. STABILITY
+
+2. DATA SAFETY
+
+3. PRESERVING CORE FUNCTIONALITY
+
+4. REMOVING TEST/UNFINISHED FEATURES
+
+5. REMOVING FAKE/DEAD CONTROLS
+
+6. SAFE CLEANUP
+
+7. NAVIGATION ORGANIZATION
+
+8. PROFILE PICTURE BUG FIX
+
+9. ABOUT PENTRIC
+
+10. HELP / USER GUIDE
+
+11. FINAL FULL QA
+
+ 
+
+At the end, the application should be production-ready and suitable to present to a real school/client.
+
+ 
+
+Again:
+
+ 
+
+THIS IS A FINALIZATION AND PRODUCTION-CLEANUP TASK.
+
+ 
+
+IT IS NOT A REBUILD.
+
+ 
+
+PRESERVE THE BRAIN OF THE APPLICATION.
+
+==================================================
+
+34. CREATE A COMPLETE DEVELOPER README FILE
+
+ 
+
+Create a comprehensive developer README file inside the application's project files.
+
+ 
+
+This README is FOR DEVELOPERS / MAINTAINERS ONLY.
+
+ 
+
+It is NOT part of the school's user-facing application.
+
+ 
+
+It must NOT appear in:
+
+ 
+
+- Admin navigation
+
+- Teacher navigation
+
+- Settings
+
+- Help / User Guide
+
+- About Pentric
+
+- Any school-facing screen
+
+- Any teacher-facing screen
+
+- Any normal application menu
+
+ 
+
+The README should exist physically inside the project/app files so that the owner, future developers, open-source contributors, maintainers, or anyone responsible for updating the application can read it directly from the source code/project.
+
+ 
+
+The purpose of this README is to make the project understandable and maintainable even if the original developer is no longer available.
+
+ 
+
+==================================================
+
+35. README MUST BE EXTREMELY DETAILED
+
+ 
+
+Do NOT create a short generic README.
+
+ 
+
+Write the README as a COMPLETE TECHNICAL DOCUMENTATION MANUAL for the entire project.
+
+ 
+
+Document as much of the actual application as possible.
+
+ 
+
+The README should be long, comprehensive, accurate, and based on the ACTUAL CODEBASE.
+
+ 
+
+Do not make up information.
+
+ 
+
+Inspect the actual source code before writing the README.
+
+ 
+
+If a feature exists, document it.
+
+ 
+
+If a feature was removed, do not claim that it still exists.
+
+ 
+
+If a system works differently from what this prompt assumes, document the actual implementation.
+
+ 
+
+The README should explain the application from the highest level down to the individual important implementation details.
+
+ 
+
+==================================================
+
+36. README — PROJECT OVERVIEW
+
+ 
+
+Start with a complete overview of Pentric.
+
+ 
+
+Explain:
+
+ 
+
+- What Pentric is
+
+- What problem it solves
+
+- Who it is intended for
+
+- What administrators can do
+
+- What teachers can do
+
+- How the timetable system works at a high level
+
+- What the major components of the application are
+
+- What technology the application uses
+
+- What database it uses
+
+- How the major parts communicate with each other
+
+- What the application is intended to be used for
+
+ 
+
+Clearly state that Pentric was created by:
+
+ 
+
+PPF Innovations and Technology Group
+
+ 
+
+Explain that the project is intended to be maintainable and customizable.
+
+ 
+
+==================================================
+
+37. README — TECHNOLOGY STACK
+
+ 
+
+Document the ACTUAL technology stack.
+
+ 
+
+For example, if the project uses technologies such as:
+
+ 
+
+- Python
+
+- PyQt/PyQt6
+
+- SQLite
+
+- HTML/CSS/JavaScript
+
+- Android/Kotlin
+
+- React
+
+- Next.js
+
+- Other libraries
+
+ 
+
+document the technologies that ACTUALLY exist in the current project.
+
+ 
+
+Do not assume.
+
+ 
+
+For every important dependency, explain:
+
+ 
+
+- What it is
+
+- Why the application uses it
+
+- Where it is used
+
+- Whether it is required
+
+- Any important compatibility considerations
+
+- Installation requirements where applicable
+
+ 
+
+Include actual versions where they can be reliably determined from the project.
+
+ 
+
+==================================================
+
+38. README — COMPLETE PROJECT STRUCTURE
+
+ 
+
+Document the project's folder and file structure.
+
+ 
+
+For example:
+
+ 
+
+project/
+
+├── main...
+
+├── database...
+
+├── assets...
+
+├── screens...
+
+├── components...
+
+└── ...
+
+ 
+
+BUT:
+
+ 
+
+Use the ACTUAL project structure.
+
+ 
+
+Do not invent folders.
+
+ 
+
+For every important file, explain:
+
+ 
+
+- What the file does
+
+- What part of the application uses it
+
+- Important classes/functions/components inside it
+
+- Important dependencies
+
+- Whether it should be modified carefully
+
+- Whether it is safe to modify
+
+- Whether it contains core logic
+
+ 
+
+If a file contains critical timetable logic, clearly mark it as critical.
+
+ 
+
+If a file controls authentication, clearly mark it.
+
+ 
+
+If a file handles database access, clearly mark it.
+
+ 
+
+==================================================
+
+39. README — FILE-BY-FILE DOCUMENTATION
+
+ 
+
+Document EVERY important source file.
+
+ 
+
+For each file, explain:
+
+ 
+
+FILE NAME:
+
+ 
+
+Purpose:
+
+ 
+
+What it does:
+
+ 
+
+Important classes:
+
+ 
+
+Important functions:
+
+ 
+
+Important variables:
+
+ 
+
+Dependencies:
+
+ 
+
+What calls this file:
+
+ 
+
+What this file calls:
+
+ 
+
+Database interaction:
+
+ 
+
+UI interaction:
+
+ 
+
+Important warnings:
+
+ 
+
+Safe modification areas:
+
+ 
+
+Dangerous modification areas:
+
+ 
+
+Do not merely list filenames.
+
+ 
+
+Explain what each important file actually does based on the code.
+
+ 
+
+==================================================
+
+40. README — FUNCTION / CLASS DOCUMENTATION
+
+ 
+
+For important classes and functions, document:
+
+ 
+
+- Name
+
+- Purpose
+
+- Inputs
+
+- Outputs
+
+- Important side effects
+
+- Database interaction
+
+- UI interaction
+
+- Other functions it depends on
+
+- Other parts of the application that depend on it
+
+- Important assumptions
+
+- What could break if it is modified
+
+ 
+
+Pay particular attention to:
+
+ 
+
+- Authentication functions
+
+- Database functions
+
+- Timetable generation
+
+- Clash detection
+
+- Create Persona
+
+- Teacher profile functions
+
+- Profile image handling
+
+- Admin functions
+
+- Teacher functions
+
+- School management
+
+- Class management
+
+- Subject management
+
+- Timetable editing
+
+- Navigation
+
+- Settings
+
+- Delete School
+
+- Application startup
+
+ 
+
+==================================================
+
+41. README — DATABASE DOCUMENTATION
+
+ 
+
+Document the actual database architecture.
+
+ 
+
+Explain:
+
+ 
+
+- Database filename
+
+- Database location
+
+- Tables
+
+- Columns
+
+- Primary keys
+
+- Foreign keys
+
+- Relationships
+
+- Important indexes if present
+
+- Important constraints
+
+- Which tables contain users
+
+- Which tables contain teachers
+
+- Which tables contain classes
+
+- Which tables contain subjects
+
+- Which tables contain timetable information
+
+- Which tables contain school information
+
+- Which tables contain profile information
+
+- Which fields store profile image information
+
+- How records relate to each other
+
+ 
+
+Use the ACTUAL database schema.
+
+ 
+
+Do not invent tables.
+
+ 
+
+Do not omit important relationships.
+
+ 
+
+Explain what could happen if a developer changes a primary key or relationship.
+
+ 
+
+Clearly mark database areas that should not be changed casually.
+
+ 
+
+==================================================
+
+42. README — DATABASE SAFETY
+
+ 
+
+Include a dedicated section explaining how to safely modify the database.
+
+ 
+
+Explain:
+
+ 
+
+- How to back up the database
+
+- What files need to be backed up
+
+- What should never be deleted casually
+
+- How existing users/data can be protected
+
+- How schema changes should be handled
+
+- Why IDs and relationships should not be changed unnecessarily
+
+- How migrations should be approached if needed
+
+- How developers should test database changes before releasing them
+
+ 
+
+Do NOT write destructive instructions that could accidentally wipe the production database.
+
+ 
+
+The documentation should emphasize backup and safe migration.
+
+ 
+
+==================================================
+
+43. README — AUTHENTICATION SYSTEM
+
+ 
+
+Document exactly how authentication works.
+
+ 
+
+Explain:
+
+ 
+
+- Admin login
+
+- Teacher login
+
+- Signup
+
+- Password fields
+
+- Password confirmation
+
+- Reset/retrieve code
+
+- Password reset
+
+- User records
+
+- Authentication flow
+
+- Session/current-user handling if applicable
+
+- Logout if applicable
+
+- How permissions distinguish Admin and Teacher
+
+ 
+
+Document the actual implementation.
+
+ 
+
+Do not expose actual passwords, reset codes, secrets, API keys, tokens, or private credentials.
+
+ 
+
+NEVER write real secrets into the README.
+
+ 
+
+If the code contains secrets accidentally, do not copy those secrets into documentation.
+
+ 
+
+Instead, warn that they must be kept private.
+
+ 
+
+==================================================
+
+44. README — ADMIN SYSTEM
+
+ 
+
+Document the complete Admin system.
+
+ 
+
+Explain:
+
+ 
+
+- Admin login
+
+- Dashboard
+
+- Navigation
+
+- School Management
+
+- School information
+
+- Classes
+
+- Subjects
+
+- Teachers
+
+- Timetable management
+
+- Timetable editing
+
+- Settings
+
+- Delete School
+
+- Help
+
+- About Pentric
+
+- Any other legitimate existing Admin feature
+
+ 
+
+For every important screen, explain:
+
+ 
+
+- How the screen is reached
+
+- What it displays
+
+- What actions it provides
+
+- What data it reads
+
+- What data it writes
+
+- What functions/components control it
+
+ 
+
+==================================================
+
+45. README — TEACHER SYSTEM
+
+ 
+
+Document the complete Teacher workflow.
+
+ 
+
+Explain:
+
+ 
+
+- Teacher login
+
+- Teacher dashboard
+
+- Teacher profile
+
+- Profile picture
+
+- Create Persona
+
+- Class selection
+
+- Subject selection
+
+- Day selection
+
+- Period selection
+
+- Generate Timetable
+
+- Timetable display
+
+- Timetable editing if supported
+
+- Navigation
+
+- Logout if supported
+
+ 
+
+Explain the actual data flow.
+
+ 
+
+For example:
+
+ 
+
+Teacher selects information.
+
+ 
+
+↓
+
+ 
+
+Application validates it.
+
+ 
+
+↓
+
+ 
+
+Application checks the existing timetable/relationships.
+
+ 
+
+↓
+
+ 
+
+Application generates or retrieves the appropriate timetable.
+
+ 
+
+↓
+
+ 
+
+The result is displayed.
+
+ 
+
+Document the actual implementation rather than inventing one.
+
+ 
+
+==================================================
+
+46. README — TIMETABLE ENGINE
+
+ 
+
+This is one of the most important sections.
+
+ 
+
+Document the timetable engine as thoroughly as possible.
+
+ 
+
+Explain:
+
+ 
+
+- How timetable data is represented
+
+- How days are represented
+
+- How periods are represented
+
+- How classes are represented
+
+- How teachers are represented
+
+- How subjects are represented
+
+- How assignments are represented
+
+- How timetable generation works
+
+- How validation works
+
+- How clashes are detected
+
+- How teacher clashes are prevented
+
+- How class clashes are prevented
+
+- How existing constraints are enforced
+
+- How timetable editing works
+
+- How generated timetables are saved
+
+- How timetables are loaded
+
+ 
+
+If the algorithm contains specific logic, document it carefully.
+
+ 
+
+Explain the sequence of operations.
+
+ 
+
+Do not merely say:
+
+ 
+
+"The application generates a timetable."
+
+ 
+
+Explain HOW the current implementation actually does it.
+
+ 
+
+==================================================
+
+47. README — TIMETABLE RULES
+
+ 
+
+Document all important timetable rules that are actually enforced by the code.
+
+ 
+
+For example, if the application uses:
+
+ 
+
+Monday–Friday
+
+ 
+
+and periods such as:
+
+ 
+
+8:05–8:45
+
+8:45–9:25
+
+9:25–10:05
+
+10:05–10:45
+
+10:45–11:25
+
+11:25–12:05
+
+12:05–12:45
+
+12:45–1:25
+
+1:25–2:10
+
+ 
+
+document them if those are actually the current application's configured periods.
+
+ 
+
+Document other real rules such as:
+
+ 
+
+- No doubles
+
+- Teacher conflict prevention
+
+- Class conflict prevention
+
+- Subject restrictions
+
+- Period restrictions
+
+- Any existing Maths/English placement rules
+
+ 
+
+ONLY document rules that actually exist in the current code.
+
+ 
+
+==================================================
+
+48. README — CLASH DETECTION
+
+ 
+
+Explain exactly how clash detection works.
+
+ 
+
+Document:
+
+ 
+
+Teacher clash:
+
+ 
+
+Teacher cannot be assigned to multiple classes at the same day and period where the system prohibits it.
+
+ 
+
+Class clash:
+
+ 
+
+A class cannot have conflicting timetable assignments at the same day and period.
+
+ 
+
+Explain where the clash checks are implemented.
+
+ 
+
+Explain which functions perform them.
+
+ 
+
+Explain what happens when a clash is detected.
+
+ 
+
+Explain how a future developer should modify the system without accidentally disabling clash protection.
+
+ 
+
+==================================================
+
+49. README — CREATE PERSONA
+
+ 
+
+Document Create Persona in detail.
+
+ 
+
+Explain:
+
+ 
+
+- Purpose
+
+- Screen
+
+- Data fields
+
+- Class selection
+
+- Subject selection
+
+- Day selection
+
+- Period selection
+
+- Validation
+
+- How selections are stored
+
+- How they are used during timetable generation
+
+- What happens when information is missing
+
+- What happens when there is a conflict
+
+ 
+
+Clearly identify any code that is critical to this workflow.
+
+ 
+
+==================================================
+
+50. README — GENERATE TIMETABLE
+
+ 
+
+Document the Generate Timetable workflow.
+
+ 
+
+Explain:
+
+ 
+
+- What triggers generation
+
+- What information is required
+
+- What validation occurs
+
+- What processing occurs
+
+- How the loading/progress behavior works if applicable
+
+- How the timetable is produced
+
+- How the generated timetable is displayed
+
+- What "No Class" means
+
+- How Back works
+
+- How Edit Timetable works
+
+ 
+
+Document actual behavior.
+
+ 
+
+==================================================
+
+51. README — TEACHER PROFILE PICTURE SYSTEM
+
+ 
+
+Document the profile picture implementation in detail.
+
+ 
+
+Explain:
+
+ 
+
+- Where the image is selected
+
+- How the image is stored
+
+- What database field/reference is used
+
+- How the teacher record is associated with the image
+
+- How the teacher profile loads it
+
+- How Admin loads it
+
+- How the application handles missing files
+
+- How the image persists after restart
+
+ 
+
+Also document the specific bug fix made during this production cleanup.
+
+ 
+
+Explain:
+
+ 
+
+- What the original problem was
+
+- What caused it
+
+- What was changed
+
+- Why the fix is safe
+
+- What files/functions were changed
+
+- How it was tested
+
+ 
+
+Do not expose private user data.
+
+ 
+
+==================================================
+
+52. README — UI / NAVIGATION ARCHITECTURE
+
+ 
+
+Document the navigation system.
+
+ 
+
+Explain:
+
+ 
+
+- Main application window
+
+- Admin navigation
+
+- Teacher navigation
+
+- Expandable sections
+
+- Pages
+
+- Tabs
+
+- Dialogs
+
+- Navigation transitions
+
+- Back behavior
+
+- Settings
+
+- Help
+
+- About
+
+ 
+
+Explain which files/components control navigation.
+
+ 
+
+Clearly identify important navigation dependencies.
+
+ 
+
+==================================================
+
+53. README — REMOVED FEATURES
+
+ 
+
+Document the features that were intentionally removed during production cleanup.
+
+ 
+
+These include:
+
+ 
+
+- ROM
+
+- Venue Exams
+
+- Bulk Import
+
+- Analytics
+
+ 
+
+Explain that they were removed because they were testing/development/non-required production functionality.
+
+ 
+
+Do not document them as active features.
+
+ 
+
+This section exists so a future developer understands that their absence is intentional and does not mistakenly re-add them.
+
+ 
+
+==================================================
+
+54. README — FEATURES THAT MUST NOT BE REINTRODUCED
+
+ 
+
+Document important architectural decisions.
+
+ 
+
+Explain that future developers should not casually reintroduce:
+
+ 
+
+- ROM
+
+- Venue Exams
+
+- Bulk Import
+
+- Analytics
+
+- Fake/dead settings
+
+- Developer-only controls
+
+- Saturday scheduling unless specifically required and intentionally implemented
+
+- Duplicate Delete School functionality
+
+- Duplicate navigation pages
+
+ 
+
+Explain that removed features were intentionally removed during production cleanup.
+
+ 
+
+==================================================
+
+55. README — HARD-CODED DATA
+
+ 
+
+Document any remaining intentionally hard-coded values.
+
+ 
+
+For each one, explain:
+
+ 
+
+- What it is
+
+- Why it is hard-coded
+
+- Whether it is safe to change
+
+- Where it can be changed
+
+- Whether changing it requires a database migration
+
+- Whether it is part of the core timetable logic
+
+ 
+
+Also document which school-specific information was moved to existing configuration/database systems.
+
+ 
+
+==================================================
+
+56. README — CONFIGURATION
+
+ 
+
+Document all important configuration values.
+
+ 
+
+For each configuration value, explain:
+
+ 
+
+- Name
+
+- Location
+
+- Purpose
+
+- Valid values
+
+- Default value if applicable
+
+- What happens if it is changed
+
+- Whether changing it requires restart
+
+- Whether changing it affects the database
+
+ 
+
+Do not expose secrets.
+
+ 
+
+Use placeholders for sensitive credentials.
+
+ 
+
+==================================================
+
+57. README — ASSETS
+
+ 
+
+Document important assets such as:
+
+ 
+
+- Images
+
+- Icons
+
+- Backgrounds
+
+- Fonts
+
+- Other resources
+
+ 
+
+Explain:
+
+ 
+
+- Where they are stored
+
+- What uses them
+
+- Which screens use them
+
+- What happens if an asset is missing
+
+- Whether it is safe to replace the asset
+
+ 
+
+Do not remove existing required assets.
+
+ 
+
+==================================================
+
+58. README — INSTALLATION
+
+ 
+
+Provide complete installation instructions based on the ACTUAL project.
+
+ 
+
+Explain:
+
+ 
+
+- Required operating system
+
+- Required runtime
+
+- Required language version
+
+- Required packages
+
+- How to install dependencies
+
+- How to configure the project
+
+- How to start the application
+
+- How to create/use the database if necessary
+
+- Where required files should be placed
+
+ 
+
+Do not give generic instructions that do not match the actual project.
+
+ 
+
+==================================================
+
+59. README — DEVELOPMENT SETUP
+
+ 
+
+Explain how a new developer can obtain the project and start working on it.
+
+ 
+
+Include:
+
+ 
+
+1. Get the source code.
+
+2. Install required dependencies.
+
+3. Configure required settings.
+
+4. Preserve the database.
+
+5. Start the application.
+
+6. Verify that it launches.
+
+7. Test login.
+
+8. Test Admin.
+
+9. Test Teacher.
+
+10. Test timetable generation.
+
+ 
+
+Explain any environment-specific considerations discovered from the actual project.
+
+ 
+
+==================================================
+
+60. README — DEBUGGING AND TROUBLESHOOTING
+
+ 
+
+Create a comprehensive troubleshooting section.
+
+ 
+
+Include common problems such as:
+
+ 
+
+- Application does not start
+
+- Missing dependency
+
+- Database not found
+
+- Database cannot be opened
+
+- Missing image
+
+- Profile picture not showing
+
+- Admin cannot see teacher profile picture
+
+- Teacher cannot log in
+
+- Admin cannot log in
+
+- Timetable does not generate
+
+- Timetable contains a conflict
+
+- Page does not open
+
+- Button does nothing
+
+- Missing asset
+
+- Broken navigation
+
+ 
+
+For each known problem:
+
+ 
+
+Explain:
+
+ 
+
+Possible cause:
+
+ 
+
+Where to investigate:
+
+ 
+
+What to check:
+
+ 
+
+Safe fix:
+
+ 
+
+What NOT to change:
+
+ 
+
+==================================================
+
+61. README — SAFE DEVELOPMENT RULES
+
+ 
+
+Create a dedicated section titled something like:
+
+ 
+
+"IMPORTANT — READ BEFORE MODIFYING THE PROJECT"
+
+ 
+
+Include rules such as:
+
+ 
+
+1. Back up the database before database work.
+
+ 
+
+2. Do not rewrite the timetable engine unless absolutely necessary.
+
+ 
+
+3. Do not casually change IDs.
+
+ 
+
+4. Do not wipe the database.
+
+ 
+
+5. Do not rewrite authentication unnecessarily.
+
+ 
+
+6. Do not remove existing relationships without understanding them.
+
+ 
+
+7. Test after every meaningful change.
+
+ 
+
+8. Do not introduce fake controls.
+
+ 
+
+9. Do not add features without understanding how they affect existing functionality.
+
+ 
+
+10. Preserve teacher/class/subject relationships.
+
+ 
+
+11. Preserve clash detection.
+
+ 
+
+12. Preserve existing timetable rules.
+
+ 
+
+13. Test both Admin and Teacher workflows after core changes.
+
+ 
+
+14. Test with existing data.
+
+ 
+
+15. Prefer small isolated fixes over large rewrites.
+
+ 
+
+==================================================
+
+62. README — TESTING
+
+ 
+
+Document how the application should be tested.
+
+ 
+
+Create a practical test checklist.
+
+ 
+
+Include:
+
+ 
+
+STARTUP TEST
+
+ 
+
+- Application starts
+
+- Main screen loads
+
+- No startup errors
+
+ 
+
+AUTHENTICATION TEST
+
+ 
+
+- Admin login
+
+- Teacher login
+
+- Signup
+
+- Password reset
+
+ 
+
+ADMIN TEST
+
+ 
+
+- Dashboard
+
+- School management
+
+- Classes
+
+- Subjects
+
+- Teachers
+
+- Timetable
+
+- Settings
+
+- Delete School
+
+- Help
+
+- About
+
+ 
+
+TEACHER TEST
+
+ 
+
+- Login
+
+- Profile
+
+- Profile picture
+
+- Create Persona
+
+- Generate Timetable
+
+- Timetable display
+
+- Editing where supported
+
+ 
+
+TIMETABLE TEST
+
+ 
+
+- Valid timetable
+
+- Teacher clash
+
+- Class clash
+
+- Empty slot
+
+- Existing constraints
+
+- Saving
+
+- Reloading
+
+ 
+
+DATABASE TEST
+
+ 
+
+- Existing data survives restart
+
+- Existing users remain
+
+- Existing teachers remain
+
+- Existing timetable remains
+
+ 
+
+PROFILE TEST
+
+ 
+
+- Teacher A uploads image
+
+- Teacher A sees image
+
+- Admin sees Teacher A image
+
+- Teacher B sees Teacher B image
+
+- Teacher A image never appears for Teacher B
+
+- Restart application
+
+- Verify again
+
+ 
+
+==================================================
+
+63. README — RELEASE PROCESS
+
+ 
+
+Explain how a future developer should safely prepare a new release.
+
+ 
+
+Suggested process:
+
+ 
+
+1. Back up production database.
+
+2. Make changes in development copy.
+
+3. Test startup.
+
+4. Test authentication.
+
+5. Test Admin.
+
+6. Test Teacher.
+
+7. Test timetable generation.
+
+8. Test clash detection.
+
+9. Test database persistence.
+
+10. Test profile pictures.
+
+11. Check removed features remain removed.
+
+12. Check navigation.
+
+13. Check Help.
+
+14. Check About.
+
+15. Review errors/logs.
+
+16. Create release backup.
+
+17. Only then deploy/distribute.
+
+ 
+
+Adapt this process to the actual application.
+
+ 
+
+==================================================
+
+64. README — CUSTOMIZATION GUIDE
+
+ 
+
+Because this project may be open source and may be customized for other schools, include a section explaining how developers can safely customize it.
+
+ 
+
+Explain how to change, where appropriate:
+
+ 
+
+- School name
+
+- School information
+
+- Classes
+
+- Subjects
+
+- Teachers
+
+- Timetable periods
+
+- UI branding
+
+- Logo
+
+- Background
+
+- Colors
+
+- Text
+
+- About information
+
+- Help documentation
+
+ 
+
+Clearly distinguish between:
+
+ 
+
+SAFE CUSTOMIZATION
+
+ 
+
+and
+
+ 
+
+CORE SYSTEM MODIFICATION.
+
+ 
+
+Explain which changes can be made without touching the timetable engine.
+
+ 
+
+Explain which changes require careful testing.
+
+ 
+
+==================================================
+
+65. README — EXTENDING THE APPLICATION
+
+ 
+
+Explain how a future developer should approach adding a new feature.
+
+ 
+
+Provide a recommended workflow:
+
+ 
+
+1. Understand the existing architecture.
+
+2. Identify the correct existing module.
+
+3. Avoid duplicate systems.
+
+4. Add the smallest isolated change.
+
+5. Preserve existing database relationships.
+
+6. Preserve authentication.
+
+7. Preserve timetable behavior.
+
+8. Test the new feature.
+
+9. Test unrelated core functionality.
+
+10. Update the README.
+
+ 
+
+==================================================
+
+66. README — CHANGE LOG
+
+ 
+
+Include a section describing the current production-cleanup changes.
+
+ 
+
+Document changes such as:
+
+ 
+
+- Product renamed/branded Pentric
+
+- Testing features removed
+
+- Dead controls removed
+
+- Navigation organized
+
+- Hard-coded school-specific dependencies reduced
+
+- Teacher profile picture persistence/display fixed
+
+- About Pentric added
+
+- Admin Guide added
+
+- Teacher Guide added
+
+- Developer README added
+
+ 
+
+Use the actual changes made.
+
+ 
+
+Do not claim a change was made if it was not.
+
+ 
+
+==================================================
+
+67. README — CODE COMMENTS
+
+ 
+
+In addition to the README, improve code comments where useful.
+
+ 
+
+Important or complicated sections of code should have comments explaining:
+
+ 
+
+- What the code does
+
+- Why it exists
+
+- Important assumptions
+
+- Important constraints
+
+- Dangerous areas
+
+- Database relationships
+
+- Timetable rules
+
+- Clash detection
+
+- Profile picture handling
+
+ 
+
+However:
+
+ 
+
+DO NOT rewrite every line simply to add comments.
+
+ 
+
+Do not add pointless comments such as:
+
+ 
+
+Add one to counter
+
+ 
+
+counter += 1
+
+ 
+
+Only add useful documentation around code that future developers may struggle to understand.
+
+ 
+
+==================================================
+
+68. README — DO NOT DOCUMENT SECRETS
+
+ 
+
+The README must NEVER contain:
+
+ 
+
+- Passwords
+
+- API keys
+
+- Authentication tokens
+
+- Private keys
+
+- Database credentials
+
+- Production secrets
+
+- Personal private information
+
+- Real reset codes
+
+- Private user information
+
+ 
+
+If the project contains a secret that should not be exposed, document the variable/configuration name without exposing the value.
+
+ 
+
+Use:
+
+ 
+
+YOUR_SECRET_HERE
+
+ 
+
+or another appropriate placeholder.
+
+ 
+
+==================================================
+
+69. README — ACCURACY REQUIREMENT
+
+ 
+
+The README must be generated from the ACTUAL APPLICATION.
+
+ 
+
+Do not simply copy this prompt into the README.
+
+ 
+
+This prompt describes requirements.
+
+ 
+
+The README describes the REAL IMPLEMENTATION.
+
+ 
+
+Therefore:
+
+ 
+
+Inspect the source code.
+
+ 
+
+Inspect the database structure.
+
+ 
+
+Inspect the navigation.
+
+ 
+
+Inspect the screens.
+
+ 
+
+Inspect the timetable engine.
+
+ 
+
+Inspect the authentication.
+
+ 
+
+Inspect the profile system.
+
+ 
+
+Then document what actually exists.
+
+ 
+
+If something differs from the assumptions in this prompt, document the actual implementation.
+
+ 
+
+==================================================
+
+70. README LOCATION
+
+ 
+
+Save the README inside the application/project files.
+
+ 
+
+Prefer the project root unless the existing project has a more appropriate documentation directory.
+
+ 
+
+Use a conventional filename such as:
+
+ 
+
+README.md
+
+ 
+
+If a README.md already exists:
+
+ 
+
+DO NOT blindly overwrite it.
+
+ 
+
+Inspect it first.
+
+ 
+
+Preserve useful existing information.
+
+ 
+
+Merge the new comprehensive documentation into it.
+
+ 
+
+If there are multiple README/documentation files, organize them sensibly.
+
+ 
+
+The final project should have one clearly identifiable primary developer README.
+
+ 
+
+==================================================
+
+71. README MUST NOT APPEAR IN THE APP UI
+
+ 
+
+This is extremely important.
+
+ 
+
+The README is developer documentation.
+
+ 
+
+It must NOT be displayed inside the school application.
+
+ 
+
+Do NOT add:
+
+ 
+
+"README"
+
+ 
+
+to Admin navigation.
+
+ 
+
+Do NOT add it to Teacher navigation.
+
+ 
+
+Do NOT put it under Help.
+
+ 
+
+Do NOT put it under Settings.
+
+ 
+
+Do NOT put it under About.
+
+ 
+
+The school users should not be expected to read technical source-code documentation.
+
+ 
+
+The school-facing Help/User Guide is separate.
+
+ 
+
+The developer README is stored in the project files.
+
+ 
+
+==================================================
+
+72. FINAL README QUALITY STANDARD
+
+ 
+
+The README should be detailed enough that a competent developer who has never seen the project before can:
+
+ 
+
+- Understand the application's purpose
+
+- Understand the architecture
+
+- Install it
+
+- Run it
+
+- Understand the database
+
+- Understand authentication
+
+- Understand Admin
+
+- Understand Teacher
+
+- Understand timetable generation
+
+- Understand clash detection
+
+- Understand Create Persona
+
+- Understand profile pictures
+
+- Find important files
+
+- Find important functions
+
+- Understand important classes
+
+- Safely customize the application
+
+- Safely fix common problems
+
+- Safely add features
+
+- Safely modify the UI
+
+- Safely modify school information
+
+- Understand what NOT to change
+
+- Test the application
+
+- Prepare a release
+
+- Continue maintaining the project
+
+ 
+
+The documentation should be detailed enough to serve as a technical handover document.
+
+ 
+
+Do not intentionally keep the README short.
+
+ 
+
+If there is useful technical information that a future maintainer would need, DOCUMENT IT.
+
+ 
+
+==================================================
+
+73. FINAL PROJECT DOCUMENTATION STRUCTURE
+
+ 
+
+The final project should therefore have two completely separate types of documentation:
+
+ 
+
+A. SCHOOL-FACING DOCUMENTATION
+
+ 
+
+Inside the application:
+
+ 
+
+- Help
+
+- Administrator Guide
+
+- Teacher Guide
+
+- About Pentric
+
+ 
+
+These should be simple and understandable to school users.
+
+ 
+
+B. DEVELOPER-FACING DOCUMENTATION
+
+ 
+
+Inside the project files:
+
+ 
+
+- README.md
+
+- Technical architecture
+
+- Source-code documentation
+
+- Database documentation
+
+- Installation
+
+- Development setup
+
+- Testing
+
+- Troubleshooting
+
+- Customization
+
+- Release process
+
+- Maintenance notes
+
+- Change log
+
+- Safe development rules
+
+ 
+
+The two documentation systems must NOT be mixed.
+
+ 
+
+==================================================
+
+74. FINAL REQUIREMENT
+
+ 
+
+After completing all application changes, update the developer README AGAIN.
+
+ 
+
+The README must describe the FINAL state of the project, not the state before cleanup.
+
+ 
+
+Therefore:
+
+ 
+
+Do the implementation first.
+
+ 
+
+Then inspect the final project.
+
+ 
+
+Then generate/update README.md based on the final implementation.
+
+ 
+
+Then verify that:
+
+ 
+
+- Every important feature is documented.
+
+- Every important file is documented.
+
+- Important database relationships are documented.
+
+- Important timetable logic is documented.
+
+- Authentication is documented.
+
+- Teacher/admin workflows are documented.
+
+- Profile picture fix is documented.
+
+- Removed features are documented as intentionally removed.
+
+- Installation is documented.
+
+- Testing is documented.
+
+- Troubleshooting is documented.
+
+- Customization is documented.
+
+- Release process is documented.
+
+ 
+
+The final README should be treated as the project's permanent technical reference.
+
+ 
+
+==================================================
+
+75. FINAL DOCUMENTATION PRINCIPLE
+
+ 
+
+Think of the README as the document that answers:
+
+ 
+
+"If the original developer disappeared tomorrow and another competent developer had to maintain, customize, debug, update, or sell this application, could they understand how everything works without starting from zero?"
+
+ 
+
+The answer should be YES.
+
+ 
+
+Make the README as complete and technically useful as possible.
+
+ 
+
+Do not sacrifice accuracy for length.
+
+ 
+
+Do not invent details simply to make it longer.
+
+ 
+
+The goal is:
+
+ 
+
+MAXIMUM USEFUL DOCUMENTATION OF THE ACTUAL CODEBASE.
+    

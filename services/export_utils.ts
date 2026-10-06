@@ -1,0 +1,353 @@
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import * as XLSX from 'xlsx';
+import { TimetableGrid, Class, Subject, Teacher, Room, ExamSession } from '../types';
+import { DAYS, ALL_SUBJECTS } from '../constants';
+
+const PERIOD_HEADERS = ['Day', 'P1\n(8:05-8:45)', 'P2\n(8:45-9:25)', 'P3\n(9:25-10:05)', 'P4\n(10:05-10:45)', 'SHORT BREAK', 'P5\n(11:00-11:40)', 'P6\n(11:40-12:20)', 'P7\n(12:20-1:00)', 'LUNCH BREAK', 'P8\n(1:30-2:10)'];
+
+function getSubjectName(id: string, subjects: Subject[]): string {
+  if (!id || id === 'FREE') return 'FREE';
+  const sub = subjects.find(s => s.id === id) || ALL_SUBJECTS.find(s => s.id === id);
+  return sub ? sub.name : id;
+}
+
+function getTeacherNames(cell: any, teachers: Teacher[]): string {
+  if (!cell || !cell.teacherId || cell.teacherId === 'SYSTEM') return '';
+  const ids = cell.teacherIds && cell.teacherIds.length > 0 ? cell.teacherIds : [cell.teacherId];
+  const names = ids.map((id: string) => {
+    const t = teachers.find(tr => tr.id === id);
+    return t ? t.name.split(' ').pop() : 'Staff';
+  });
+  return names.join(' / ');
+}
+
+function getRoomName(roomId: string | undefined, rooms: Room[]): string {
+  if (!roomId) return '';
+  const rm = rooms.find(r => r.id === roomId);
+  return rm ? ` [${rm.name}]` : '';
+}
+
+// Generate PDF for a single class or teacher slice
+export function generatePDF(
+  timetable: TimetableGrid,
+  entityId: string,
+  type: 'CLASS' | 'TEACHER',
+  schoolName: string,
+  term: string,
+  classes: Class[],
+  subjects: Subject[],
+  teachers: Teacher[],
+  rooms: Room[] = []
+) {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+
+  let entityTitle = 'Timetable';
+  if (type === 'CLASS') {
+    const cls = classes.find(c => c.id === entityId);
+    entityTitle = cls ? `CLASS TIMETABLE - ${cls.name}` : `CLASS TIMETABLE - ${entityId}`;
+  } else {
+    const t = teachers.find(tr => tr.id === entityId);
+    entityTitle = t ? `TEACHER TIMETABLE - ${t.name} (${t.subjectsTaught ? t.subjectsTaught.join(', ') : ''})` : `TEACHER TIMETABLE - ${entityId}`;
+  }
+
+  // Header
+  doc.setFontSize(16);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(15, 23, 42); // slate-900
+  doc.text(schoolName || 'OTA TOTAL ACADEMY', 14, 15);
+
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(71, 85, 105); // slate-600
+  doc.text(`${entityTitle} | ${term || 'ACADEMIC SESSION'}`, 14, 22);
+
+  // Build rows for days
+  const tableData: string[][] = [];
+
+  DAYS.forEach((day, d) => {
+    const row: string[] = [day.toUpperCase()];
+
+    // Columns: P1, P2, P3, P4, BREAK, P5, P6, P7, LUNCH, P8
+    const colIndices = [0, 1, 2, 3, 'BREAK', 4, 5, 6, 'LUNCH', 7];
+
+    colIndices.forEach(colIdx => {
+      if (colIdx === 'BREAK') {
+        row.push('SHORT BREAK\n(10:45 - 11:00)');
+      } else if (colIdx === 'LUNCH') {
+        row.push('LUNCH BREAK\n(1:00 - 1:30)');
+      } else {
+        const p = colIdx as number;
+        let cellData: any = null;
+
+        if (type === 'CLASS') {
+          cellData = timetable[entityId]?.[d]?.[p];
+        } else {
+          // Find if teacher has a class in this d, p
+          for (const cId in timetable) {
+            const cell = timetable[cId]?.[d]?.[p];
+            if (cell && (cell.teacherId === entityId || (cell.teacherIds && cell.teacherIds.includes(entityId)))) {
+              cellData = { ...cell, _displayClass: cId };
+              break;
+            }
+          }
+        }
+
+        if (cellData) {
+          const sub = getSubjectName(cellData.subjectId, subjects);
+          const tName = type === 'CLASS' ? getTeacherNames(cellData, teachers) : (cellData._displayClass ? `Class: ${cellData._displayClass}` : '');
+          const roomStr = getRoomName(cellData.roomId, rooms);
+          let text = `${sub}${roomStr}`;
+          if (tName) text += `\n${tName}`;
+          if (cellData.isManual) text += ' (Manual)';
+          row.push(text);
+        } else {
+          row.push('-');
+        }
+      }
+    });
+
+    tableData.push(row);
+  });
+
+  autoTable(doc, {
+    startY: 28,
+    head: [PERIOD_HEADERS],
+    body: tableData,
+    theme: 'grid',
+    styles: {
+      fontSize: 8,
+      cellPadding: 3,
+      valign: 'middle',
+      halign: 'center',
+      overflow: 'linebreak'
+    },
+    headStyles: {
+      fillColor: [30, 41, 59], // Slate 800
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 8
+    },
+    columnStyles: {
+      0: { fontStyle: 'bold', fillColor: [241, 245, 249], cellWidth: 20 },
+      5: { fillColor: [254, 243, 199], textColor: [180, 83, 9], fontStyle: 'bold', cellWidth: 20 }, // Short Break
+      9: { fillColor: [254, 243, 199], textColor: [180, 83, 9], fontStyle: 'bold', cellWidth: 20 }  // Lunch Break
+    }
+  });
+
+  // Footer
+  const pageCount = (doc as any).internal.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFontSize(8);
+    doc.setTextColor(148, 163, 184);
+    doc.text(`Generated by OTA Smart Timetable System on ${new Date().toLocaleDateString()}`, 14, doc.internal.pageSize.height - 8);
+  }
+
+  doc.save(`${entityTitle.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`);
+}
+
+// Generate Excel Workbook containing all classes or all teachers
+export function generateExcelWorkbook(
+  timetable: TimetableGrid,
+  type: 'CLASSES' | 'TEACHERS',
+  schoolName: string,
+  term: string,
+  classes: Class[],
+  subjects: Subject[],
+  teachers: Teacher[],
+  rooms: Room[] = []
+) {
+  const wb = XLSX.utils.book_new();
+
+  const periodLabels = ['Day', 'P1 (8:05-8:45)', 'P2 (8:45-9:25)', 'P3 (9:25-10:05)', 'P4 (10:05-10:45)', 'SHORT BREAK', 'P5 (11:00-11:40)', 'P6 (11:40-12:20)', 'P7 (12:20-1:00)', 'LUNCH BREAK', 'P8 (1:30-2:10)'];
+
+  if (type === 'CLASSES') {
+    classes.forEach(cls => {
+      const rows: any[][] = [];
+      rows.push([schoolName || 'OTA TOTAL ACADEMY', `CLASS: ${cls.name}`, `TERM: ${term || 'CURRENT'}`]);
+      rows.push([]);
+      rows.push(periodLabels);
+
+      DAYS.forEach((day, d) => {
+        const row: string[] = [day.toUpperCase()];
+        const colIndices = [0, 1, 2, 3, 'BREAK', 4, 5, 6, 'LUNCH', 7];
+
+        colIndices.forEach(colIdx => {
+          if (colIdx === 'BREAK') row.push('SHORT BREAK');
+          else if (colIdx === 'LUNCH') row.push('LUNCH BREAK');
+          else {
+            const p = colIdx as number;
+            const cell = timetable[cls.id]?.[d]?.[p];
+            if (cell) {
+              const sub = getSubjectName(cell.subjectId, subjects);
+              const tName = getTeacherNames(cell, teachers);
+              const roomStr = getRoomName(cell.roomId, rooms);
+              row.push(`${sub}${roomStr}${tName ? ' (' + tName + ')' : ''}`);
+            } else {
+              row.push('-');
+            }
+          }
+        });
+        rows.push(row);
+      });
+
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      // Clean sheet name (max 31 chars)
+      const sheetName = cls.name.replace(/[:\\/?*\[\]]/g, '').substring(0, 30);
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    });
+  } else {
+    teachers.forEach(t => {
+      const rows: any[][] = [];
+      rows.push([schoolName || 'OTA TOTAL ACADEMY', `TEACHER: ${t.name}`, `SUBJECTS: ${t.subjectsTaught ? t.subjectsTaught.join(', ') : ''}`]);
+      rows.push([]);
+      rows.push(periodLabels);
+
+      DAYS.forEach((day, d) => {
+        const row: string[] = [day.toUpperCase()];
+        const colIndices = [0, 1, 2, 3, 'BREAK', 4, 5, 6, 'LUNCH', 7];
+
+        colIndices.forEach(colIdx => {
+          if (colIdx === 'BREAK') row.push('SHORT BREAK');
+          else if (colIdx === 'LUNCH') row.push('LUNCH BREAK');
+          else {
+            const p = colIdx as number;
+            let foundCell: any = null;
+            let foundClass = '';
+
+            for (const cId in timetable) {
+              const cell = timetable[cId]?.[d]?.[p];
+              if (cell && (cell.teacherId === t.id || (cell.teacherIds && cell.teacherIds.includes(t.id)))) {
+                foundCell = cell;
+                foundClass = cId;
+                break;
+              }
+            }
+
+            if (foundCell) {
+              const sub = getSubjectName(foundCell.subjectId, subjects);
+              const roomStr = getRoomName(foundCell.roomId, rooms);
+              row.push(`${sub}${roomStr} [Class: ${foundClass}]`);
+            } else {
+              row.push('-');
+            }
+          }
+        });
+        rows.push(row);
+      });
+
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      const sheetName = t.name.replace(/[:\\/?*\[\]]/g, '').substring(0, 30);
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    });
+  }
+
+  XLSX.writeFile(wb, `${schoolName.replace(/[^a-zA-Z0-9]/g, '_')}_${type}_Timetable.xlsx`);
+}
+
+// Generate PDF for Exam Schedule
+export function generateExamPDF(
+  exams: ExamSession[],
+  schoolName: string,
+  term: string,
+  classes: Class[],
+  subjects: Subject[],
+  rooms: Room[],
+  teachers: Teacher[]
+) {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+
+  doc.setFontSize(16);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(15, 23, 42);
+  doc.text(schoolName || 'OTA TOTAL ACADEMY', 14, 15);
+
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(71, 85, 105);
+  doc.text(`EXAMINATION TIMETABLE | ${term || 'ACADEMIC SESSION'}`, 14, 22);
+
+  const tableHeaders = ['Date', 'Time Slot', 'Class', 'Subject', 'Venue / Room', 'Supervisor'];
+  const tableData: string[][] = [];
+
+  // Sort exams by date, then startTime, then classId
+  const sorted = [...exams].sort((a, b) => {
+    if (a.date !== b.date) return a.date.localeCompare(b.date);
+    if (a.startTime !== b.startTime) return a.startTime.localeCompare(b.startTime);
+    return a.classId.localeCompare(b.classId);
+  });
+
+  sorted.forEach(ex => {
+    const cls = classes.find(c => c.id === ex.classId);
+    const sub = subjects.find(s => s.id === ex.subjectId) || ALL_SUBJECTS.find(s => s.id === ex.subjectId);
+    const rm = rooms.find(r => r.id === ex.roomId);
+    const sup = teachers.find(t => t.id === ex.supervisorTeacherId);
+
+    tableData.push([
+      ex.date,
+      `${ex.startTime} - ${ex.endTime}`,
+      cls ? cls.name : ex.classId,
+      sub ? sub.name : ex.subjectId,
+      rm ? `${rm.name} (Cap: ${rm.capacity})` : 'Unassigned',
+      sup ? sup.name : 'Unassigned'
+    ]);
+  });
+
+  autoTable(doc, {
+    startY: 28,
+    head: [tableHeaders],
+    body: tableData.length > 0 ? tableData : [['No exam sessions scheduled yet.', '', '', '', '', '']],
+    theme: 'striped',
+    styles: { fontSize: 9, cellPadding: 3, valign: 'middle' },
+    headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontStyle: 'bold' }
+  });
+
+  doc.save(`${schoolName.replace(/[^a-zA-Z0-9]/g, '_')}_Exam_Schedule.pdf`);
+}
+
+// Generate Excel for Exam Schedule
+export function generateExamExcel(
+  exams: ExamSession[],
+  schoolName: string,
+  term: string,
+  classes: Class[],
+  subjects: Subject[],
+  rooms: Room[],
+  teachers: Teacher[]
+) {
+  const wb = XLSX.utils.book_new();
+  const rows: any[][] = [];
+
+  rows.push([schoolName || 'OTA TOTAL ACADEMY', 'EXAMINATION TIMETABLE', `TERM: ${term || 'CURRENT'}`]);
+  rows.push([]);
+  rows.push(['Date', 'Start Time', 'End Time', 'Class', 'Subject', 'Venue / Room', 'Supervisor', 'Notes']);
+
+  const sorted = [...exams].sort((a, b) => {
+    if (a.date !== b.date) return a.date.localeCompare(b.date);
+    if (a.startTime !== b.startTime) return a.startTime.localeCompare(b.startTime);
+    return a.classId.localeCompare(b.classId);
+  });
+
+  sorted.forEach(ex => {
+    const cls = classes.find(c => c.id === ex.classId);
+    const sub = subjects.find(s => s.id === ex.subjectId) || ALL_SUBJECTS.find(s => s.id === ex.subjectId);
+    const rm = rooms.find(r => r.id === ex.roomId);
+    const sup = teachers.find(t => t.id === ex.supervisorTeacherId);
+
+    rows.push([
+      ex.date,
+      ex.startTime,
+      ex.endTime,
+      cls ? cls.name : ex.classId,
+      sub ? sub.name : ex.subjectId,
+      rm ? rm.name : 'Unassigned',
+      sup ? sup.name : 'Unassigned',
+      ex.notes || ''
+    ]);
+  });
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  XLSX.utils.book_append_sheet(wb, ws, 'Exam Schedule');
+  XLSX.writeFile(wb, `${schoolName.replace(/[^a-zA-Z0-9]/g, '_')}_Exam_Schedule.xlsx`);
+}

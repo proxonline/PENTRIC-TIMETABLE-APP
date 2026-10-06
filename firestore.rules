@@ -1,0 +1,56 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all unknown collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    function incoming() {
+      return request.resource.data;
+    }
+    function existing() {
+      return resource.data;
+    }
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Validation helper for School entity
+    function isValidSchool(data) {
+      return data.keys().hasAll(['id', 'name', 'code', 'createdAt']) &&
+        data.id is string && isValidId(data.id) &&
+        data.name is string && data.name.size() >= 3 && data.name.size() <= 120 &&
+        data.code is string && data.code.size() >= 2 && data.code.size() <= 10 &&
+        (!('motto' in data) || (data.motto is string && data.motto.size() <= 200)) &&
+        (!('address' in data) || (data.address is string && data.address.size() <= 250)) &&
+        (!('themeColor' in data) || (data.themeColor is string && data.themeColor.size() <= 25)) &&
+        (!('adminEmail' in data) || (data.adminEmail is string && data.adminEmail.size() <= 120)) &&
+        (!('adminPhone' in data) || (data.adminPhone is string && data.adminPhone.size() <= 30)) &&
+        (!('accreditationNumber' in data) || (data.accreditationNumber is string && data.accreditationNumber.size() <= 60)) &&
+        (!('registeredBy' in data) || (data.registeredBy is string && data.registeredBy.size() <= 80)) &&
+        (!('isOta' in data) || (data.isOta is bool)) &&
+        (!('status' in data) || (data.status in ['ACTIVE', 'ARCHIVED']));
+    }
+
+    // Schools collection:
+    // - Read: Public (to populate School Portal for lookup)
+    // - Create/Update: Validates schema and ID
+    // - Delete: Validates ID and prevents deletion of the default founding school
+    match /schools/{schoolId} {
+      allow get, list: if isValidId(schoolId);
+      allow create, update: if isValidId(schoolId) && isValidSchool(incoming()) && incoming().id == schoolId;
+      allow delete: if isValidId(schoolId) && schoolId != 'ota_total_academy';
+    }
+
+    // Dynamic application sync collection
+    match /ota_app_store/{key} {
+      allow read, write: if true;
+    }
+  }
+}

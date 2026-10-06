@@ -1,0 +1,118 @@
+{
+  "entities": {
+    "School": {
+      "title": "School",
+      "description": "Educational institution registered manually by an administrator",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique school identifier",
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "maxLength": 100
+        },
+        "name": {
+          "type": "string",
+          "description": "Official name of the school",
+          "minLength": 3,
+          "maxLength": 120
+        },
+        "code": {
+          "type": "string",
+          "description": "Short code or acronym for the school (e.g. OTA, CKC)",
+          "minLength": 2,
+          "maxLength": 10,
+          "pattern": "^[A-Z0-9_-]+$"
+        },
+        "shortName": {
+          "type": "string",
+          "description": "Brief display name for badges and headers",
+          "maxLength": 60
+        },
+        "motto": {
+          "type": "string",
+          "description": "School motto or academic mission statement",
+          "maxLength": 200
+        },
+        "address": {
+          "type": "string",
+          "description": "Campus physical address or location",
+          "maxLength": 250
+        },
+        "themeColor": {
+          "type": "string",
+          "description": "Hex color for school branding",
+          "maxLength": 25
+        },
+        "adminEmail": {
+          "type": "string",
+          "description": "Contact email of registering administrator or registrar",
+          "maxLength": 120
+        },
+        "adminPhone": {
+          "type": "string",
+          "description": "Official administrative contact phone number",
+          "maxLength": 30
+        },
+        "accreditationNumber": {
+          "type": "string",
+          "description": "Official accreditation or ministry approval number",
+          "maxLength": 60
+        },
+        "registeredBy": {
+          "type": "string",
+          "description": "Administrator ID or username who verified and created this entry",
+          "maxLength": 80
+        },
+        "registeredAt": {
+          "type": "number",
+          "description": "Timestamp when the school was manually registered"
+        },
+        "isOta": {
+          "type": "boolean",
+          "description": "Indicates whether this is the founding OTA Total Academy"
+        },
+        "status": {
+          "type": "string",
+          "description": "Registration status of the institution",
+          "enum": ["ACTIVE", "ARCHIVED"]
+        },
+        "createdAt": {
+          "type": "number",
+          "description": "Creation timestamp"
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "Last update timestamp"
+        }
+      },
+      "required": ["id", "name", "code", "createdAt"]
+    },
+    "AppStoreDoc": {
+      "title": "AppStoreDoc",
+      "description": "Dynamic application sync store documents for real-time synchronization",
+      "type": "object",
+      "properties": {
+        "payload": {
+          "type": "string",
+          "description": "Serialized data payload for the sync key"
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "Timestamp of the last sync write"
+        }
+      },
+      "required": ["updatedAt"]
+    }
+  },
+  "firestore": {
+    "/schools/{schoolId}": {
+      "schema": "School",
+      "description": "Stores manually registered institutions. No default data is pre-populated."
+    },
+    "/ota_app_store/{key}": {
+      "schema": "AppStoreDoc",
+      "description": "Live cross-device state synchronization store documents."
+    }
+  }
+}
