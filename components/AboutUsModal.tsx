@@ -30,7 +30,7 @@ export const AboutUsModal: React.FC<Props> = ({ onClose }) => {
               About Pentric
             </h1>
             <p className="text-slate-300 text-sm md:text-base font-medium max-w-xl">
-              Created by <span className="text-white font-bold">PPF Innovations and Technology Group</span>
+              Created by <a href="https://pbfa.netlify.app" target="_blank" rel="noopener noreferrer" className="text-white font-bold underline hover:text-blue-300 transition-colors">PBFA INNOVATIONS AND TECHNOLOGY</a> (<span className="text-blue-200">pbfa.netlify.app</span>)
             </p>
           </div>
         </div>
@@ -101,7 +101,7 @@ export const AboutUsModal: React.FC<Props> = ({ onClose }) => {
 
           <div className="pt-4 border-t border-slate-200 text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-3">
             <div>
-              <strong>Pentric Production Release</strong> • Built by PPF Innovations and Technology Group
+              <strong>Pentric Production Release</strong> • Built by <a href="https://pbfa.netlify.app" target="_blank" rel="noopener noreferrer" className="font-bold underline text-slate-700 hover:text-blue-600">PBFA INNOVATIONS AND TECHNOLOGY</a> (pbfa.netlify.app)
             </div>
             <button
               onClick={onClose}

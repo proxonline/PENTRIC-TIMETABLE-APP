@@ -60,15 +60,39 @@ export const adminAuth = getAuth(appAdmin);
 
 // Reliable direct Firestore writer for ota_app_store using Firebase JS Client SDK
 import { initializeApp as initClientApp, getApps as getClientApps } from 'firebase/app';
-import { getFirestore as getClientFirestore, doc as clientDoc, setDoc as clientSetDoc, deleteDoc as clientDeleteDoc } from 'firebase/firestore';
+import { 
+  getFirestore as getClientFirestore, 
+  initializeFirestore as initClientFirestore, 
+  setLogLevel as setClientLogLevel,
+  doc as clientDoc, 
+  setDoc as clientSetDoc, 
+  deleteDoc as clientDeleteDoc 
+} from 'firebase/firestore';
+
+try {
+  setClientLogLevel('silent');
+} catch {}
 
 const clientApp = getClientApps().length === 0
   ? initClientApp(firebaseConfigJson)
   : getClientApps()[0];
 
-export const clientDb = firestoreDatabaseId
-  ? getClientFirestore(clientApp, firestoreDatabaseId)
-  : getClientFirestore(clientApp);
+let clientDbInstance: any;
+try {
+  const clientOptions = {
+    experimentalForceLongPolling: true,
+    useFetchStreams: false
+  };
+  clientDbInstance = firestoreDatabaseId
+    ? initClientFirestore(clientApp, clientOptions, firestoreDatabaseId)
+    : initClientFirestore(clientApp, clientOptions);
+} catch {
+  clientDbInstance = firestoreDatabaseId
+    ? getClientFirestore(clientApp, firestoreDatabaseId)
+    : getClientFirestore(clientApp);
+}
+
+export const clientDb = clientDbInstance;
 
 export async function syncOtaStoreDocToFirestore(key: string, payload: any): Promise<boolean> {
   try {

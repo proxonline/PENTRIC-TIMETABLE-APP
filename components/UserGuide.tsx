@@ -271,7 +271,7 @@ export const UserGuide: React.FC<Props> = ({ role }) => {
 
       {/* Footer Branding Note */}
       <div className="text-center pt-8 border-t border-slate-200 text-xs text-slate-500">
-        Pentric Timetable Management System • Created by <strong>PPF Innovations and Technology Group</strong>
+        Pentric Timetable Management System • Created by <a href="https://pbfa.netlify.app" target="_blank" rel="noopener noreferrer" className="font-bold underline hover:text-blue-600">PBFA INNOVATIONS AND TECHNOLOGY</a> (pbfa.netlify.app)
       </div>
 
     </div>

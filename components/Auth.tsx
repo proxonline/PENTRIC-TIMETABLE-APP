@@ -596,7 +596,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
                       <h1 className="text-3xl font-black text-slate-900 mb-4 tracking-tight">System Architecture</h1>
                       <div className="space-y-5 text-slate-600 mb-10 leading-relaxed">
                           <p>
-                              Pentric is an advanced academic timetable management system created by PPF Innovations and Technology Group to streamline school scheduling and academic operations.
+                              Pentric is an advanced academic timetable management system created by PBFA INNOVATIONS AND TECHNOLOGY (<a href="https://pbfa.netlify.app" target="_blank" rel="noopener noreferrer" className="underline font-bold text-blue-600">pbfa.netlify.app</a>) to streamline school scheduling and academic operations.
                           </p>
                           <ul className="space-y-3">
                               <li className="flex items-center gap-3"><div className="w-2 h-2 rounded-full bg-blue-500"></div>Conflict-free generation algorithms</li>
@@ -878,31 +878,6 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
                                 <div className="flex justify-between items-center text-sm font-medium px-1">
                                     <button onClick={() => switchView('SIGNUP')} className="text-blue-600 hover:text-blue-700 hover:underline decoration-2 underline-offset-4">Create Account</button>
                                     <button onClick={() => switchView('RECOVERY')} className="text-slate-400 hover:text-slate-600">Forgot Password?</button>
-                                </div>
-                                <div className="pt-4 border-t border-slate-100 flex flex-col gap-2">
-                                    <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Quick Demo Auto-Fill</div>
-                                    <div className="flex gap-2">
-                                        <button 
-                                          type="button"
-                                          onClick={() => { setRoleMode('ADMIN'); setFormData({ ...formData, username: 'admin', password: 'admin123' }); }}
-                                          className="flex-1 py-2 px-3 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-xl text-xs font-bold transition border border-blue-200/60"
-                                        >
-                                            Demo Admin
-                                        </button>
-                                        <button 
-                                          type="button"
-                                          onClick={() => { 
-                                            const teachers = storage.getTeachers();
-                                            const t = teachers && teachers.length > 0 ? teachers[0] : null;
-                                            const u = t && t.username ? t.username : (t && t.name ? t.name : 'David Okafor');
-                                            setRoleMode('TEACHER'); 
-                                            setFormData({ ...formData, username: u, password: 'password123' }); 
-                                          }}
-                                          className="flex-1 py-2 px-3 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-xl text-xs font-bold transition border border-emerald-200/60"
-                                        >
-                                            Demo Teacher
-                                        </button>
-                                    </div>
                                 </div>
                                 <div className="pt-2 flex flex-col gap-2">
                                      {onSelectPublicView && (

@@ -47,15 +47,18 @@ const firebaseConfig = {
 // Initialize Firebase App
 const app: FirebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// Set log level to error to prevent transient network warnings from cluttering console output
+// Set log level to silent to prevent transient long-polling failover warnings from cluttering console output
 try {
-  setLogLevel('error');
+  setLogLevel('silent');
 } catch {}
 
 const firestoreDatabaseId = firebaseConfigJson.firestoreDatabaseId;
 let db: Firestore;
 try {
-  const options = { experimentalAutoDetectLongPolling: true };
+  const options = { 
+    experimentalForceLongPolling: true,
+    useFetchStreams: false 
+  };
   db = firestoreDatabaseId
     ? initializeFirestore(app, options, firestoreDatabaseId)
     : initializeFirestore(app, options);

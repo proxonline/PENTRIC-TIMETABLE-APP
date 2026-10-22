@@ -8,12 +8,13 @@ const PERIOD_HEADERS = ['Day', 'P1\n(8:05-8:45)', 'P2\n(8:45-9:25)', 'P3\n(9:25-
 
 function getSubjectName(id: string, subjects: Subject[]): string {
   if (!id || id === 'FREE') return 'FREE';
+  if (id === 'WORSHIP') return 'Worship';
   const sub = subjects.find(s => s.id === id) || ALL_SUBJECTS.find(s => s.id === id);
   return sub ? sub.name : id;
 }
 
 function getTeacherNames(cell: any, teachers: Teacher[]): string {
-  if (!cell || !cell.teacherId || cell.teacherId === 'SYSTEM') return '';
+  if (!cell || !cell.teacherId || cell.teacherId === 'SYSTEM' || cell.subjectId === 'WORSHIP') return '';
   const ids = cell.teacherIds && cell.teacherIds.length > 0 ? cell.teacherIds : [cell.teacherId];
   const names = ids.map((id: string) => {
     const t = teachers.find(tr => tr.id === id);

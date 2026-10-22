@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { storage } from '../services/storage';
 import { monitorChatContent } from '../services/ai';
 import { ALL_SUBJECTS, ALL_CLASSES, DAYS, PERIODS } from '../constants';
+import { getEligibleSubjectsForClass } from '../services/curriculum_eligibility';
 import { Teacher, Room, Availability, SwapRequest, AppNotification, AppSettings, ChatMessage, TimetableGrid, TeacherAbsence } from '../types';
 import { TimetableGrid as TimetableGridView } from './TimetableGrid';
 import { UserGuide } from './UserGuide';
@@ -52,6 +53,23 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
   const [tempClassSubjects, setTempClassSubjects] = useState<Record<string, string[]>>({});
   const [currentOnboardingClassIndex, setCurrentOnboardingClassIndex] = useState(0);
   const [onboardingSearch, setOnboardingSearch] = useState('');
+  const [classCategoryFilter, setClassCategoryFilter] = useState<'ALL' | 'JS' | 'SS'>('ALL');
+
+  // Sync assigned classes when teacher object loads
+  useEffect(() => {
+    if (teacher && !teacher.isCompleted) {
+      if (teacher.assignedClasses && teacher.assignedClasses.length > 0 && tempSelectedClasses.length === 0) {
+        setTempSelectedClasses(teacher.assignedClasses);
+      }
+      if (teacher.subjectsTaught && teacher.subjectsTaught.length > 0 && Object.keys(tempClassSubjects).length === 0) {
+        const initialMap: Record<string, string[]> = {};
+        (teacher.assignedClasses || []).forEach(cId => {
+          initialMap[cId] = [...teacher.subjectsTaught];
+        });
+        setTempClassSubjects(initialMap);
+      }
+    }
+  }, [teacher]);
 
   // Data
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
@@ -414,89 +432,519 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
 
   if (!teacher) return null;
 
-  // --- ONBOARDING WIZARD (Abbreviated for brevity, logic unchanged from previous) ---
+  // --- ONBOARDING WIZARD ---
   if (!teacher.isCompleted) {
-      // (Keep existing onboarding JSX exactly as is)
       const currentClassId = tempSelectedClasses?.[currentOnboardingClassIndex];
       const currentClass = ALL_CLASSES.find(c => c && c.id === currentClassId);
       const search = (onboardingSearch || '').toLowerCase();
-      const filteredClasses = ALL_CLASSES.filter(c => ((c.name || '').toLowerCase().includes(search)) || ((c.category || '').toLowerCase().includes(search)));
-      const filteredSubjects = currentClass ? ALL_SUBJECTS.filter(s => s.category === currentClass.category && ((s.name || '').toLowerCase().includes(search))) : [];
+      
+      const isJunior = (id: string) => id.startsWith('JS');
+      const isSenior = (id: string) => id.startsWith('SS');
+
+      const filteredClasses = ALL_CLASSES.filter(c => {
+          const matchesSearch = ((c.name || '').toLowerCase().includes(search)) || ((c.category || '').toLowerCase().includes(search));
+          if (!matchesSearch) return false;
+          if (classCategoryFilter === 'JS') return isJunior(c.id);
+          if (classCategoryFilter === 'SS') return isSenior(c.id);
+          return true;
+      });
+
+      const allConfiguredSubjects = storage.getSubjects();
+      const eligibleSubjects = currentClass ? getEligibleSubjectsForClass(currentClass, allConfiguredSubjects) : [];
+      const filteredSubjects = eligibleSubjects.filter(s => ((s.name || '').toLowerCase().includes(search) || (s.code || '').toLowerCase().includes(search)));
+
+      const handleSelectAllJunior = () => {
+          const juniorIds = ALL_CLASSES.filter(c => isJunior(c.id)).map(c => c.id);
+          setTempSelectedClasses(prev => Array.from(new Set([...prev, ...juniorIds])));
+      };
+
+      const handleSelectAllSenior = () => {
+          const seniorIds = ALL_CLASSES.filter(c => isSenior(c.id)).map(c => c.id);
+          setTempSelectedClasses(prev => Array.from(new Set([...prev, ...seniorIds])));
+      };
+
+      const handleClearAllClasses = () => {
+          setTempSelectedClasses([]);
+      };
+
+      const handleSelectAllSubjectsForCurrentClass = () => {
+          if (!currentClass) return;
+          const eligibleIds = eligibleSubjects
+              .filter(s => !allTeachers.some(t => t.id !== teacher.id && t.assignedClasses.includes(currentClass.id) && t.subjectsTaught.includes(s.id)))
+              .map(s => s.id);
+          setTempClassSubjects(prev => ({
+              ...prev,
+              [currentClass.id]: eligibleIds
+          }));
+      };
+
+      const handleClearSubjectsForCurrentClass = () => {
+          if (!currentClass) return;
+          setTempClassSubjects(prev => ({
+              ...prev,
+              [currentClass.id]: []
+          }));
+      };
 
       return (
-        <div className="fixed inset-0 z-50 bg-slate-50 flex items-center justify-center p-6 animate-in fade-in">
-           {/* ... Onboarding UI (Copied from original file, omitted here to save tokens but assumed present) ... */}
-           {/* RE-INSERTING THE ESSENTIAL ONBOARDING UI STRUCTURE */}
-           <div className="w-full max-w-5xl bg-white rounded-[2.5rem] shadow-2xl border border-slate-200 overflow-hidden flex flex-col md:flex-row min-h-[600px]">
-                <div className="w-full md:w-80 bg-slate-900 text-white p-8 flex flex-col justify-between">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-0 sm:p-4 md:p-6 overflow-hidden">
+           <div className="w-full h-[100dvh] sm:h-auto sm:max-h-[92dvh] sm:max-w-4xl bg-white sm:rounded-3xl shadow-2xl border-0 sm:border border-slate-200/80 overflow-hidden flex flex-col md:flex-row">
+                
+                {/* DESKTOP SIDEBAR */}
+                <aside className="hidden md:flex md:w-72 bg-slate-900 text-white p-6 md:p-8 flex-col justify-between shrink-0">
                      <div>
-                        <h1 className="text-3xl font-black mb-4">Setup</h1>
-                        <p className="text-slate-400">Complete your profile to continue.</p>
-                     </div>
-                     <div className="space-y-4">
-                        <div className={`opacity-${onboardingStep===0?100:50}`}>1. Intro</div>
-                        <div className={`opacity-${onboardingStep===1?100:50}`}>2. Classes</div>
-                        <div className={`opacity-${onboardingStep===2?100:50}`}>3. Subjects</div>
-                     </div>
-                </div>
-                <div className="flex-1 p-8 bg-white flex flex-col">
-                    {onboardingStep === 0 && (
-                        <div className="flex-1 flex flex-col items-center justify-center text-center">
-                            <h2 className="text-2xl font-bold mb-4">Welcome, {teacher.name}</h2>
-                            <button onClick={()=>setOnboardingStep(1)} className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold">Start Setup</button>
-                        </div>
-                    )}
-                    {onboardingStep === 1 && (
-                        <div className="flex-1 flex flex-col h-full">
-                            <h2 className="text-xl font-bold mb-4">Select Classes</h2>
-                            <div className="flex-1 overflow-y-auto grid grid-cols-3 gap-2">
-                                {filteredClasses.map(c => (
-                                    <button key={c.id} onClick={()=>toggleClassSelection(c.id)} className={`p-2 border rounded-lg ${tempSelectedClasses.includes(c.id)?'bg-blue-100 border-blue-500':'bg-white'}`}>{c.name}</button>
-                                ))}
+                        <div className="flex items-center gap-3 mb-6">
+                            <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/30">
+                                <GraduationCap size={20} className="text-white" />
                             </div>
-                            <button onClick={()=>setOnboardingStep(2)} disabled={tempSelectedClasses.length===0} className="mt-4 px-6 py-3 bg-slate-900 text-white rounded-xl font-bold">Next</button>
+                            <div>
+                                <h1 className="font-bold text-base tracking-tight leading-none text-white">Pentric Faculty</h1>
+                                <p className="text-[11px] text-blue-400 font-medium mt-1">Teacher Setup</p>
+                            </div>
                         </div>
-                    )}
-                    {onboardingStep === 2 && (
-                         <div className="flex-1 flex flex-col h-full">
-                            <h2 className="text-xl font-bold mb-4">Subjects for {currentClass?.name}</h2>
-                            <div className="flex-1 overflow-y-auto grid grid-cols-2 gap-2">
-                                {filteredSubjects.map(s => {
-                                    // Check if this subject is already taught by another teacher for this class
-                                    const takenBy = allTeachers.find(t => 
-                                        t.id !== teacher.id && 
-                                        t.assignedClasses.includes(currentClass!.id) && 
-                                        t.subjectsTaught.includes(s.id)
-                                    );
-                                    const isTaken = !!takenBy;
-                                    const isSelected = tempClassSubjects[currentClass!.id]?.includes(s.id);
 
-                                    return (
-                                        <button 
-                                            key={s.id} 
-                                            onClick={() => !isTaken && toggleSubjectForClass(currentClass!.id, s.id)} 
-                                            disabled={isTaken}
-                                            className={`p-2 border rounded-lg flex flex-col items-center justify-center text-center transition-all
-                                                ${isSelected ? 'bg-blue-100 border-blue-500 text-blue-900' : 'bg-white hover:bg-slate-50'}
-                                                ${isTaken ? 'opacity-50 cursor-not-allowed bg-slate-100 border-slate-200' : ''}
-                                            `}
-                                        >
-                                            <span className="font-medium">{s.name}</span>
-                                            {isTaken && (
-                                                <span className="text-[10px] text-red-500 mt-1 font-bold">
-                                                    Taken by {takenBy?.name ? takenBy.name.split(' ')[0] : 'Staff'}
-                                                </span>
-                                            )}
-                                        </button>
-                                    );
-                                })}
+                        <div className="space-y-3">
+                            <div className={`p-3 rounded-xl transition-all border ${onboardingStep === 0 ? 'bg-white/10 border-blue-500/50 text-white font-bold' : onboardingStep > 0 ? 'bg-white/5 border-emerald-500/30 text-emerald-300' : 'border-transparent text-slate-400'}`}>
+                                <div className="flex items-center gap-2.5 text-xs">
+                                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black ${onboardingStep > 0 ? 'bg-emerald-500 text-white' : onboardingStep === 0 ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'}`}>
+                                        {onboardingStep > 0 ? <Check size={12} /> : '1'}
+                                    </span>
+                                    <span>1. Welcome & Intro</span>
+                                </div>
                             </div>
-                            <button onClick={()=>{
-                                if(currentOnboardingClassIndex < tempSelectedClasses.length -1) setCurrentOnboardingClassIndex(prev=>prev+1);
-                                else finishOnboarding();
-                            }} className="mt-4 px-6 py-3 bg-slate-900 text-white rounded-xl font-bold">
-                                {currentOnboardingClassIndex < tempSelectedClasses.length - 1 ? 'Next Class' : 'Finish'}
-                            </button>
+
+                            <div className={`p-3 rounded-xl transition-all border ${onboardingStep === 1 ? 'bg-white/10 border-blue-500/50 text-white font-bold' : onboardingStep > 1 ? 'bg-white/5 border-emerald-500/30 text-emerald-300' : 'border-transparent text-slate-400'}`}>
+                                <div className="flex items-center justify-between text-xs">
+                                    <div className="flex items-center gap-2.5">
+                                        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black ${onboardingStep > 1 ? 'bg-emerald-500 text-white' : onboardingStep === 1 ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'}`}>
+                                            {onboardingStep > 1 ? <Check size={12} /> : '2'}
+                                        </span>
+                                        <span>2. Assigned Classes</span>
+                                    </div>
+                                    {tempSelectedClasses.length > 0 && (
+                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/30 text-blue-200 font-mono font-bold">
+                                            {tempSelectedClasses.length}
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className={`p-3 rounded-xl transition-all border ${onboardingStep === 2 ? 'bg-white/10 border-blue-500/50 text-white font-bold' : 'border-transparent text-slate-400'}`}>
+                                <div className="flex items-center justify-between text-xs">
+                                    <div className="flex items-center gap-2.5">
+                                        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black ${onboardingStep === 2 ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'}`}>
+                                            3
+                                        </span>
+                                        <span>3. Subjects per Class</span>
+                                    </div>
+                                    {tempSelectedClasses.length > 0 && (
+                                        <span className="text-[10px] text-slate-400 font-medium">
+                                            {currentOnboardingClassIndex + 1}/{tempSelectedClasses.length}
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                     </div>
+
+                     <div className="pt-6 border-t border-white/10">
+                         <div className="flex items-center gap-3">
+                             <div className="w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shadow-inner">
+                                 {teacher.name.charAt(0)}
+                             </div>
+                             <div className="min-w-0 flex-1">
+                                 <div className="text-xs font-bold truncate text-white">{teacher.name}</div>
+                                 <div className="text-[10px] text-slate-400 truncate">@{teacher.username}</div>
+                             </div>
+                         </div>
+                     </div>
+                </aside>
+
+                {/* MOBILE STEPPER HEADER */}
+                <div className="md:hidden bg-slate-900 text-white px-4 py-3 shrink-0 flex flex-col gap-2 shadow-md">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center shadow-xs">
+                                <GraduationCap size={15} className="text-white" />
+                            </div>
+                            <span className="font-bold text-sm text-white">Teacher Setup</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 bg-white/10 px-2.5 py-1 rounded-full text-xs font-bold text-blue-300">
+                            <span>Step {onboardingStep + 1} of 3</span>
+                            <span className="text-slate-400">·</span>
+                            <span className="text-white">
+                                {onboardingStep === 0 ? 'Intro' : onboardingStep === 1 ? 'Classes' : 'Subjects'}
+                            </span>
+                        </div>
+                    </div>
+                    {/* Progress segments */}
+                    <div className="grid grid-cols-3 gap-1.5 h-1.5 w-full">
+                        <div className={`rounded-full transition-all duration-300 ${onboardingStep >= 0 ? 'bg-blue-500' : 'bg-white/20'}`} />
+                        <div className={`rounded-full transition-all duration-300 ${onboardingStep >= 1 ? 'bg-blue-500' : 'bg-white/20'}`} />
+                        <div className={`rounded-full transition-all duration-300 ${onboardingStep >= 2 ? 'bg-blue-500' : 'bg-white/20'}`} />
+                    </div>
+                </div>
+
+                {/* CONTENT AREA */}
+                <div className="flex-1 flex flex-col min-h-0 bg-white overflow-hidden">
+                    
+                    {/* STEP 0: INTRO */}
+                    {onboardingStep === 0 && (
+                        <div className="flex-1 flex flex-col justify-between p-4 sm:p-8 overflow-y-auto custom-scrollbar">
+                            <div className="max-w-lg mx-auto w-full my-auto text-center py-4">
+                                <div className="w-16 h-16 sm:w-20 sm:h-20 bg-blue-50 text-blue-600 rounded-3xl mx-auto flex items-center justify-center shadow-lg shadow-blue-500/10 mb-5">
+                                    <GraduationCap size={36} className="text-blue-600" />
+                                </div>
+                                <span className="inline-block px-3 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-bold mb-3 border border-blue-200/60">
+                                    {currentSchool.name}
+                                </span>
+                                <h2 className="text-2xl sm:text-3xl font-black text-slate-900 mb-2 tracking-tight">
+                                    Welcome, {teacher.name.split(' ')[0]}!
+                                </h2>
+                                <p className="text-slate-500 text-xs sm:text-sm leading-relaxed mb-6 max-w-md mx-auto">
+                                    Let's configure your teaching schedule in 2 simple steps. Once set, your personalized timetable will be ready immediately.
+                                </p>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left mb-6">
+                                    <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80">
+                                        <div className="w-7 h-7 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-black mb-2">1</div>
+                                        <div className="font-bold text-xs text-slate-900 mb-0.5">Pick Assigned Classes</div>
+                                        <div className="text-[11px] text-slate-500 leading-normal">Select the arms you teach (e.g. JS1A, JS2B, SS2A).</div>
+                                    </div>
+                                    <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80">
+                                        <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-black mb-2">2</div>
+                                        <div className="font-bold text-xs text-slate-900 mb-0.5">Assign Subjects</div>
+                                        <div className="text-[11px] text-slate-500 leading-normal">Confirm the specific subjects you teach in each class.</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Bottom bar */}
+                            <div className="pt-4 border-t border-slate-100 flex items-center justify-between gap-3 shrink-0">
+                                <button 
+                                    onClick={onLogout}
+                                    className="px-4 py-2.5 text-xs font-bold text-slate-400 hover:text-red-600 transition"
+                                >
+                                    Sign Out
+                                </button>
+                                <button 
+                                    onClick={() => setOnboardingStep(1)} 
+                                    className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/20 transition flex items-center gap-2"
+                                >
+                                    <span>Get Started</span>
+                                    <ChevronRight size={18} />
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    {/* STEP 1: CLASS SELECTION */}
+                    {onboardingStep === 1 && (
+                        <div className="flex-1 flex flex-col min-h-0">
+                            {/* Step Header */}
+                            <div className="p-4 sm:p-6 pb-3 border-b border-slate-100 shrink-0">
+                                <div className="flex items-center justify-between gap-2 mb-2">
+                                    <div>
+                                        <h2 className="text-lg sm:text-xl font-black text-slate-900 leading-tight">Select Classes You Teach</h2>
+                                        <p className="text-xs text-slate-400 mt-0.5">Tap the class arms you are assigned to this term.</p>
+                                    </div>
+                                    <div className="px-3 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-bold border border-blue-200/60 shrink-0">
+                                        {tempSelectedClasses.length} selected
+                                    </div>
+                                </div>
+
+                                {/* Search & Category Filters */}
+                                <div className="flex flex-col sm:flex-row gap-2 mt-3">
+                                    <div className="relative flex-1">
+                                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
+                                        <input 
+                                            type="text"
+                                            placeholder="Search classes (JS1, SS2, A, B...)"
+                                            value={onboardingSearch}
+                                            onChange={e => setOnboardingSearch(e.target.value)}
+                                            className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500 transition"
+                                        />
+                                    </div>
+                                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+                                        <button 
+                                            onClick={() => setClassCategoryFilter('ALL')}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition ${classCategoryFilter === 'ALL' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                                        >
+                                            All
+                                        </button>
+                                        <button 
+                                            onClick={() => setClassCategoryFilter('JS')}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition ${classCategoryFilter === 'JS' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                                        >
+                                            Junior (JS)
+                                        </button>
+                                        <button 
+                                            onClick={() => setClassCategoryFilter('SS')}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition ${classCategoryFilter === 'SS' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                                        >
+                                            Senior (SS)
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Quick selection shortcuts */}
+                                <div className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-100 text-[11px]">
+                                    <span className="text-slate-400 font-semibold">Shortcuts:</span>
+                                    <button onClick={handleSelectAllJunior} className="text-blue-600 hover:text-blue-800 font-bold hover:underline">+ All Junior</button>
+                                    <span className="text-slate-300">·</span>
+                                    <button onClick={handleSelectAllSenior} className="text-indigo-600 hover:text-indigo-800 font-bold hover:underline">+ All Senior</button>
+                                    {tempSelectedClasses.length > 0 && (
+                                        <>
+                                            <span className="text-slate-300">·</span>
+                                            <button onClick={handleClearAllClasses} className="text-red-500 hover:text-red-700 font-bold hover:underline">Clear</button>
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Scrollable Classes Grid */}
+                            <div className="flex-1 overflow-y-auto p-4 sm:p-6 min-h-0 custom-scrollbar">
+                                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+                                    {filteredClasses.map(c => {
+                                        const isSelected = tempSelectedClasses.includes(c.id);
+                                        return (
+                                            <button 
+                                                key={c.id} 
+                                                onClick={() => toggleClassSelection(c.id)} 
+                                                className={`min-h-[46px] p-2.5 rounded-xl border text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-1.5 active:scale-95 select-none ${
+                                                    isSelected 
+                                                        ? 'bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-500/20 ring-2 ring-blue-300' 
+                                                        : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200 hover:border-slate-300'
+                                                }`}
+                                            >
+                                                {isSelected && <Check size={14} className="stroke-[3]" />}
+                                                <span>{c.name}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                {filteredClasses.length === 0 && (
+                                    <div className="py-12 text-center text-slate-400 text-xs">
+                                        No classes matching your filter.
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Sticky Bottom Actions */}
+                            <div className="p-3 sm:p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
+                                <button 
+                                    onClick={() => setOnboardingStep(0)} 
+                                    className="px-4 py-2.5 text-slate-600 hover:bg-slate-200/70 rounded-xl font-bold text-xs sm:text-sm transition flex items-center gap-1.5"
+                                >
+                                    <ArrowLeft size={16} />
+                                    <span>Intro</span>
+                                </button>
+                                <button 
+                                    onClick={() => {
+                                        setOnboardingStep(2);
+                                        setCurrentOnboardingClassIndex(0);
+                                        setOnboardingSearch('');
+                                    }} 
+                                    disabled={tempSelectedClasses.length === 0} 
+                                    className="px-5 py-2.5 sm:px-7 sm:py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs sm:text-sm shadow-md transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                >
+                                    <span>Assign Subjects ({tempSelectedClasses.length})</span>
+                                    <ChevronRight size={18} />
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    {/* STEP 2: SUBJECTS PER CLASS */}
+                    {onboardingStep === 2 && (
+                         <div className="flex-1 flex flex-col min-h-0">
+                            {/* Step Header with Class Progress & Navigator */}
+                            <div className="p-4 sm:p-6 pb-3 border-b border-slate-100 shrink-0">
+                                <div className="flex items-center justify-between gap-2 mb-2">
+                                    <div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[11px] font-extrabold uppercase tracking-wider text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md">
+                                                Class {currentOnboardingClassIndex + 1} of {tempSelectedClasses.length}
+                                            </span>
+                                            <h2 className="text-lg sm:text-xl font-black text-slate-900 leading-tight">
+                                                {currentClass?.name || 'Class'}
+                                            </h2>
+                                        </div>
+                                        <p className="text-xs text-slate-400 mt-0.5">Select the subjects you teach in {currentClass?.name}.</p>
+                                    </div>
+                                    <div className="text-right shrink-0">
+                                        <span className="text-xs font-bold text-slate-600">
+                                            {tempClassSubjects[currentClass?.id || '']?.length || 0} subjects picked
+                                        </span>
+                                    </div>
+                                </div>
+
+                                {/* Class Navigation Pills Strip */}
+                                <div className="flex items-center gap-1.5 overflow-x-auto pb-2 custom-scrollbar">
+                                    {tempSelectedClasses.map((cId, idx) => {
+                                        const c = ALL_CLASSES.find(cls => cls.id === cId);
+                                        const isCurrent = idx === currentOnboardingClassIndex;
+                                        const count = tempClassSubjects[cId]?.length || 0;
+                                        return (
+                                            <button 
+                                                key={cId}
+                                                onClick={() => {
+                                                    setCurrentOnboardingClassIndex(idx);
+                                                    setOnboardingSearch('');
+                                                }}
+                                                className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition flex items-center gap-1.5 ${
+                                                    isCurrent 
+                                                        ? 'bg-blue-600 text-white shadow-sm' 
+                                                        : count > 0 
+                                                            ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
+                                                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                }`}
+                                            >
+                                                <span>{c?.name || cId}</span>
+                                                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                                                    isCurrent ? 'bg-white/20 text-white' : count > 0 ? 'bg-emerald-200 text-emerald-900' : 'bg-slate-200 text-slate-600'
+                                                }`}>
+                                                    {count}
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+
+                                {/* Search & Quick Actions */}
+                                <div className="flex flex-col sm:flex-row gap-2 mt-2 pt-2 border-t border-slate-100">
+                                    <div className="relative flex-1">
+                                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
+                                        <input 
+                                            type="text"
+                                            placeholder={`Search subjects for ${currentClass?.name}...`}
+                                            value={onboardingSearch}
+                                            onChange={e => setOnboardingSearch(e.target.value)}
+                                            className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500 transition"
+                                        />
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <button 
+                                            onClick={handleSelectAllSubjectsForCurrentClass}
+                                            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl whitespace-nowrap transition"
+                                        >
+                                            Select All Eligible
+                                        </button>
+                                        <button 
+                                            onClick={handleClearSubjectsForCurrentClass}
+                                            className="px-3 py-2 text-slate-400 hover:text-red-600 text-xs font-bold rounded-xl whitespace-nowrap transition"
+                                        >
+                                            Clear
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Scrollable Subjects Grid */}
+                            <div className="flex-1 overflow-y-auto p-4 sm:p-6 min-h-0 custom-scrollbar">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-2.5">
+                                    {filteredSubjects.map(s => {
+                                        if (!currentClass) return null;
+                                        // Check if already taken by another teacher for this class
+                                        const takenBy = allTeachers.find(t => 
+                                            t.id !== teacher.id && 
+                                            t.assignedClasses.includes(currentClass.id) && 
+                                            t.subjectsTaught.includes(s.id)
+                                        );
+                                        const isTaken = !!takenBy;
+                                        const isSelected = tempClassSubjects[currentClass.id]?.includes(s.id);
+
+                                        return (
+                                            <button 
+                                                key={s.id} 
+                                                onClick={() => !isTaken && toggleSubjectForClass(currentClass.id, s.id)} 
+                                                disabled={isTaken}
+                                                className={`p-3 rounded-xl border text-left transition-all flex items-start gap-3 select-none active:scale-98 ${
+                                                    isTaken 
+                                                        ? 'bg-slate-50/80 border-slate-200 opacity-60 cursor-not-allowed' 
+                                                        : isSelected 
+                                                            ? 'bg-blue-50 border-blue-500 text-blue-900 shadow-xs ring-2 ring-blue-500/20' 
+                                                            : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700 hover:border-slate-300'
+                                                }`}
+                                            >
+                                                <div className={`w-5 h-5 rounded-md flex items-center justify-center shrink-0 mt-0.5 border ${
+                                                    isSelected ? 'bg-blue-600 border-blue-600 text-white' : 'bg-slate-100 border-slate-300'
+                                                }`}>
+                                                    {isSelected && <Check size={13} className="stroke-[3]" />}
+                                                </div>
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="font-bold text-xs sm:text-sm leading-tight text-slate-900 truncate">
+                                                        {s.name}
+                                                    </div>
+                                                    <div className="flex items-center gap-1.5 mt-1">
+                                                        <span className="text-[10px] font-mono font-bold text-slate-400">
+                                                            {s.code || s.id}
+                                                        </span>
+                                                        {s.category && (
+                                                            <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-100 text-slate-500">
+                                                                {s.category}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    {isTaken && (
+                                                        <span className="inline-block mt-1 text-[10px] text-rose-600 font-bold bg-rose-50 px-2 py-0.5 rounded border border-rose-200/50">
+                                                            Taken by {takenBy?.name ? takenBy.name.split(' ')[0] : 'Staff'}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                {filteredSubjects.length === 0 && (
+                                    <div className="py-12 text-center text-slate-400 text-xs">
+                                        No subjects found matching your search.
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Sticky Bottom Actions */}
+                            <div className="p-3 sm:p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
+                                {currentOnboardingClassIndex > 0 ? (
+                                    <button 
+                                        onClick={() => {
+                                            setCurrentOnboardingClassIndex(prev => prev - 1);
+                                            setOnboardingSearch('');
+                                        }} 
+                                        className="px-4 py-2.5 text-slate-600 hover:bg-slate-200/70 rounded-xl font-bold text-xs sm:text-sm transition flex items-center gap-1.5"
+                                    >
+                                        <ArrowLeft size={16} />
+                                        <span>Previous Class</span>
+                                    </button>
+                                ) : (
+                                    <button 
+                                        onClick={() => setOnboardingStep(1)} 
+                                        className="px-4 py-2.5 text-slate-600 hover:bg-slate-200/70 rounded-xl font-bold text-xs sm:text-sm transition flex items-center gap-1.5"
+                                    >
+                                        <ArrowLeft size={16} />
+                                        <span>Back to Classes</span>
+                                    </button>
+                                )}
+
+                                {currentOnboardingClassIndex < tempSelectedClasses.length - 1 ? (
+                                    <button 
+                                        onClick={() => {
+                                            setCurrentOnboardingClassIndex(prev => prev + 1);
+                                            setOnboardingSearch('');
+                                        }} 
+                                        className="px-5 py-2.5 sm:px-7 sm:py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs sm:text-sm shadow-md transition flex items-center gap-2"
+                                    >
+                                        <span>Next: {ALL_CLASSES.find(c => c.id === tempSelectedClasses[currentOnboardingClassIndex + 1])?.name || 'Class'}</span>
+                                        <ChevronRight size={18} />
+                                    </button>
+                                ) : (
+                                    <button 
+                                        onClick={finishOnboarding} 
+                                        className="px-6 py-2.5 sm:px-8 sm:py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs sm:text-sm shadow-lg shadow-emerald-600/20 transition flex items-center gap-2"
+                                    >
+                                        <CheckCircle size={18} />
+                                        <span>Finish & View Timetable</span>
+                                    </button>
+                                )}
+                            </div>
                          </div>
                     )}
                 </div>
@@ -567,19 +1015,21 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
         {/* CONTENT */}
         <div className="flex-1 flex flex-col h-full relative overflow-hidden">
             {/* Header */}
-            <header className="h-20 bg-white/80 backdrop-blur-sm border-b border-slate-200 px-4 md:px-8 flex justify-between items-center z-20">
-                <div className="flex items-center gap-4">
-                    <button onClick={() => setIsMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500"><Menu/></button>
+            <header className="h-16 md:h-20 bg-white/80 backdrop-blur-sm border-b border-slate-200 px-3 sm:px-6 md:px-8 flex justify-between items-center z-20">
+                <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+                    <button onClick={() => setIsMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500 hover:bg-slate-100 rounded-xl transition-colors"><Menu size={20}/></button>
                     {step !== 0 && (
-                        <button onClick={() => setStep(0)} className="p-2 bg-slate-100 hover:bg-slate-200 rounded-full transition-colors text-slate-600" title="Back to Dashboard">
-                            <ArrowLeft size={18}/>
+                        <button onClick={() => setStep(0)} className="p-1.5 sm:p-2 bg-slate-100 hover:bg-slate-200 rounded-full transition-colors text-slate-600" title="Back to Dashboard">
+                            <ArrowLeft size={16}/>
                         </button>
                     )}
-                    <h2 className="text-xl font-bold text-slate-800">{step === 0 ? 'Dashboard' : step === 6 ? 'Inbox' : step === 1 ? 'My Personalized Schedule' : step === 2 ? 'Staff Room' : step === 3 ? 'Requests' : step === 4 ? 'My Profile' : step === 5 ? 'Master Schedule' : 'User Guide'}</h2>
+                    <h2 className="text-sm sm:text-xl font-bold text-slate-800 truncate max-w-[140px] sm:max-w-none">
+                        {step === 0 ? 'Dashboard' : step === 6 ? 'Inbox' : step === 1 ? 'My Schedule' : step === 2 ? 'Staff Room' : step === 3 ? 'Requests' : step === 4 ? 'My Profile' : step === 5 ? 'Master View' : 'User Guide'}
+                    </h2>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 sm:gap-3 shrink-0">
                     {/* School Name & Switch School Button */}
-                    <div className="hidden sm:flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold bg-blue-50 border border-blue-200 text-blue-900 shadow-2xs">
+                    <div className="hidden lg:flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold bg-blue-50 border border-blue-200 text-blue-900 shadow-2xs">
                         <span className="font-extrabold text-blue-700 flex items-center gap-1.5">
                             <SchoolIcon size={14} className="text-blue-600" />
                             {currentSchool.name}
@@ -589,26 +1039,29 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
                                 onClick={onSwitchSchool}
                                 className="ml-1 text-[10px] text-blue-600 hover:text-blue-800 font-bold bg-white px-2 py-0.5 rounded-md border border-blue-200/60 shadow-2xs hover:bg-blue-50 transition"
                             >
-                                Switch School
+                                Switch
                             </button>
                         )}
                     </div>
-                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-100 border border-slate-200 shadow-sm">
-                        <span className={`w-2.5 h-2.5 rounded-full ${isFirebaseConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
-                        <span className={isFirebaseConnected ? 'text-emerald-700' : 'text-amber-700'}>
+                    <div className="flex items-center gap-1.5 sm:gap-2 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-full text-xs font-semibold bg-slate-100 border border-slate-200 shadow-sm">
+                        <span className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ${isFirebaseConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+                        <span className={`hidden sm:inline ${isFirebaseConnected ? 'text-emerald-700' : 'text-amber-700'}`}>
                             {isFirebaseConnected ? 'Live Sync Connected' : 'Syncing...'}
+                        </span>
+                        <span className={`sm:hidden text-[10px] font-bold ${isFirebaseConnected ? 'text-emerald-700' : 'text-amber-700'}`}>
+                            {isFirebaseConnected ? 'Live' : 'Sync'}
                         </span>
                     </div>
                     <div className="relative group">
-                        <button className="w-10 h-10 bg-white rounded-full border border-slate-200 shadow-sm flex items-center justify-center text-slate-500 hover:text-blue-600 transition-colors">
-                            <Bell size={20}/>
-                            {unreadCount > 0 && <span className="absolute top-0 right-0 w-3 h-3 bg-red-500 rounded-full border-2 border-white"></span>}
+                        <button onClick={() => setStep(6)} className="w-9 h-9 sm:w-10 sm:h-10 bg-white rounded-full border border-slate-200 shadow-sm flex items-center justify-center text-slate-500 hover:text-blue-600 transition-colors">
+                            <Bell size={18}/>
+                            {unreadCount > 0 && <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>}
                         </button>
                     </div>
                 </div>
             </header>
 
-            <main className="flex-1 overflow-y-auto p-4 md:p-8 custom-scrollbar bg-slate-50/50">
+            <main className="flex-1 overflow-y-auto p-3 sm:p-6 md:p-8 custom-scrollbar bg-slate-50/50">
                 
                 {/* --- DASHBOARD VIEW --- */}
                 {step === 0 && (
@@ -923,24 +1376,24 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
 
         {/* SWAP MODAL */}
         {swapModalData && (
-             <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in">
-                 <div className="bg-white rounded-[2.5rem] shadow-2xl p-8 max-w-md w-full animate-in zoom-in-95">
-                     <h3 className="text-2xl font-black text-slate-900 mb-2">Propose Swap</h3>
-                     <p className="text-slate-500 mb-6">
+             <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 animate-in fade-in">
+                 <div className="bg-white rounded-3xl sm:rounded-[2.5rem] shadow-2xl p-5 sm:p-8 max-w-md w-full animate-in zoom-in-95 max-h-[92dvh] overflow-y-auto">
+                     <h3 className="text-xl sm:text-2xl font-black text-slate-900 mb-2">Propose Swap</h3>
+                     <p className="text-xs sm:text-sm text-slate-500 mb-6 leading-relaxed">
                          Requesting <span className="font-bold text-slate-800">{ALL_SUBJECTS.find(s=>s.id===swapModalData.targetCell.subjectId)?.name}</span> 
                          {' '}from <span className="font-bold text-slate-800">{swapModalData.targetCell.teacherId}</span> 
                          {' '}at <span className="font-bold text-slate-800">{DAYS[swapModalData.coords.d]} {PERIODS[swapModalData.coords.p].label}</span>.
                      </p>
-                     <div className="space-y-4 mb-8">
+                     <div className="space-y-4 mb-6">
                          <label className="text-xs font-bold text-slate-400 uppercase ml-1">Offer in exchange</label>
-                         <select className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none font-bold text-slate-700 text-sm" value={myOfferSlot} onChange={e => setMyOfferSlot(e.target.value)}>
+                         <select className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-bold text-slate-700 text-xs sm:text-sm" value={myOfferSlot} onChange={e => setMyOfferSlot(e.target.value)}>
                              <option value="">-- Select one of your slots --</option>
                              {getMySlots().map(slot => (<option key={slot.value} value={slot.value}>{slot.label}</option>))}
                          </select>
                      </div>
-                     <div className="flex gap-4">
-                         <button onClick={() => setSwapModalData(null)} className="flex-1 py-3 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition">Cancel</button>
-                         <button onClick={sendAutomatedSwapRequest} disabled={!myOfferSlot} className="flex-1 py-3 bg-slate-900 text-white rounded-xl font-bold shadow-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800 transition">Send Proposal</button>
+                     <div className="flex gap-3">
+                         <button onClick={() => setSwapModalData(null)} className="flex-1 py-3 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition text-xs sm:text-sm">Cancel</button>
+                         <button onClick={sendAutomatedSwapRequest} disabled={!myOfferSlot} className="flex-1 py-3 bg-slate-900 text-white rounded-xl font-bold shadow-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-800 transition text-xs sm:text-sm">Send Proposal</button>
                      </div>
                  </div>
              </div>
@@ -948,8 +1401,8 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
 
         {/* ICAL CALENDAR MODAL */}
         {showCalendarModal && teacher && (
-          <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl relative border border-slate-100">
+          <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-in fade-in">
+            <div className="bg-white rounded-3xl p-5 sm:p-8 max-w-md w-full shadow-2xl relative border border-slate-100 max-h-[92dvh] overflow-y-auto">
               <button
                 onClick={() => setShowCalendarModal(false)}
                 className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100"
@@ -959,7 +1412,7 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
               <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mb-4">
                 <Calendar className="w-6 h-6" />
               </div>
-              <h3 className="text-xl font-black text-slate-900 mb-1">Calendar Sync Feed</h3>
+              <h3 className="text-lg sm:text-xl font-black text-slate-900 mb-1">Calendar Sync Feed</h3>
               <p className="text-xs text-slate-500 mb-6">Subscribe to your live timetable in Apple Calendar, Google Calendar, or Outlook</p>
 
               <div className="space-y-4 mb-6">
@@ -991,8 +1444,8 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
 
         {/* ABSENCE REQUEST MODAL */}
         {showAbsenceModal && (
-          <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl relative border border-slate-100">
+          <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-in fade-in">
+            <div className="bg-white rounded-3xl p-5 sm:p-8 max-w-md w-full shadow-2xl relative border border-slate-100 max-h-[92dvh] overflow-y-auto">
               <button
                 onClick={() => setShowAbsenceModal(false)}
                 className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100"
@@ -1002,11 +1455,11 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
               <div className="w-12 h-12 bg-rose-50 text-rose-600 rounded-2xl flex items-center justify-center mb-4">
                 <CalendarX className="w-6 h-6" />
               </div>
-              <h3 className="text-xl font-black text-slate-900 mb-1">Mark Myself Unavailable</h3>
+              <h3 className="text-lg sm:text-xl font-black text-slate-900 mb-1">Mark Myself Unavailable</h3>
               <p className="text-xs text-slate-500 mb-6">Submit absence dates for Admin approval and substitute assignment</p>
 
               <div className="space-y-4 mb-6">
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="text-xs font-bold text-slate-400 uppercase block mb-1">Start Date</label>
                     <input
@@ -1059,8 +1512,8 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
 
         {/* LESSON NOTE MODAL */}
         {lessonModal && (
-          <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl relative border border-slate-100">
+          <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-in fade-in">
+            <div className="bg-white rounded-3xl p-5 sm:p-8 max-w-md w-full shadow-2xl relative border border-slate-100 max-h-[92dvh] overflow-y-auto">
               <button
                 onClick={() => setLessonModal(null)}
                 className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100"
@@ -1070,7 +1523,7 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
               <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mb-4">
                 <BookOpen className="w-6 h-6" />
               </div>
-              <h3 className="text-xl font-black text-slate-900 mb-1">Lesson Note & Resources</h3>
+              <h3 className="text-lg sm:text-xl font-black text-slate-900 mb-1">Lesson Note & Resources</h3>
               <p className="text-xs text-slate-500 mb-6">Attach lesson plans, notes, or external links to this period</p>
 
               <div className="space-y-4 mb-6">

@@ -9,6 +9,7 @@ import { PublicTimetable } from "./components/PublicTimetable";
 import { SchoolPortal } from "./components/SchoolPortal";
 import { AboutUsModal } from "./components/AboutUsModal";
 import { TutorialOverlay } from "./components/TutorialOverlay";
+import { DeveloperConsoleModal } from "./components/DeveloperConsoleModal";
 import { storage } from "./services/storage";
 import { School } from "./types";
 import { X, Sparkles, Users, Info, Heart, Code2, Cpu, Lightbulb, WifiOff, Globe, ArrowRight, ShieldCheck, Calendar, Bell, RefreshCw, AlertOctagon, Terminal, Router, Cloud, CheckCircle2, School as SchoolIcon, Loader2 } from "lucide-react";
@@ -39,6 +40,45 @@ const App = () => {
   const [showPublicView, setShowPublicView] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isStorageReady, setIsStorageReady] = useState(storage.isReady());
+  const [showDeveloperConsole, setShowDeveloperConsole] = useState(false);
+
+  useEffect(() => {
+    // Global developer hotkey: Shift + Alt + Delete (or Backspace / Del / Shift+Alt+D fallback)
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isShift = e.shiftKey;
+      const isAlt = e.altKey;
+      
+      const isDelete = 
+        e.key === 'Delete' || 
+        e.key === 'Del' || 
+        e.code === 'Delete' || 
+        e.key === 'Backspace' || 
+        e.code === 'Backspace' || 
+        e.keyCode === 46 || 
+        e.keyCode === 8 ||
+        e.key?.toLowerCase() === 'd'; // Shift + Alt + D as safe fallback if OS blocks Delete
+
+      if (isShift && isAlt && isDelete) {
+        e.preventDefault();
+        e.stopPropagation();
+        setShowDeveloperConsole(prev => !prev);
+      }
+    };
+
+    const handleCustomTrigger = () => setShowDeveloperConsole(true);
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    document.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('open-developer-console', handleCustomTrigger);
+    (window as any).openDevConsole = () => setShowDeveloperConsole(true);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      document.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('open-developer-console', handleCustomTrigger);
+      delete (window as any).openDevConsole;
+    };
+  }, []);
 
   useEffect(() => {
     // Clean up any dynamic injected theme styles or root classes
@@ -396,6 +436,12 @@ const App = () => {
                 About Pentric
             </button>
         )}
+
+        {/* Global Developer Console (Shift + Alt + Delete) */}
+        <DeveloperConsoleModal
+          isOpen={showDeveloperConsole}
+          onClose={() => setShowDeveloperConsole(false)}
+        />
       </>
   );
 };

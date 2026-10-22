@@ -4,49 +4,49 @@ import { Subject, Class } from './types';
 // --- Subjects ---
 
 export const JSS_SUBJECTS: Subject[] = [
-  { id: 'math_jss', name: 'Mathematics', category: 'JSS', isCore: true, defaultPeriodCount: 5 },
-  { id: 'eng_jss', name: 'English', category: 'JSS', isCore: true, defaultPeriodCount: 5 },
-  { id: 'ins_jss', name: 'INS', category: 'JSS', isCore: true, defaultPeriodCount: 3 },
-  { id: 'lvf_jss', name: 'LVF', category: 'JSS', isCore: true, defaultPeriodCount: 3 },
-  { id: 'scs_jss', name: 'SCS', category: 'JSS', isCore: true, defaultPeriodCount: 3 },
-  { id: 'dgt_jss', name: 'DGT', category: 'JSS', isCore: true, defaultPeriodCount: 2 },
-  { id: 'phe_jss', name: 'PHE', category: 'JSS', isCore: true, defaultPeriodCount: 2 },
-  { id: 'bus_jss', name: 'Business Studies', category: 'JSS', isCore: true, defaultPeriodCount: 3 },
-  { id: 'yor_jss', name: 'Yoruba', category: 'JSS', isCore: false, defaultPeriodCount: 2 },
-  { id: 'nat_jss', name: 'National Values', category: 'JSS', isCore: false, defaultPeriodCount: 2 },
-  { id: 'fre_jss', name: 'French', category: 'JSS', isCore: false, defaultPeriodCount: 1 },
-  { id: 'rel_jss', name: 'IRS / CRS', category: 'JSS', isCore: false, defaultPeriodCount: 2 },
-  { id: 'his_jss', name: 'History', category: 'JSS', isCore: false, defaultPeriodCount: 1 },
-  { id: 'ara_jss', name: 'Arabic', category: 'JSS', isCore: false, defaultPeriodCount: 1 },
-  { id: 'cca_jss', name: 'CCA', category: 'JSS', isCore: false, defaultPeriodCount: 1 },
+  { id: 'math_jss', name: 'Mathematics', code: 'MATH', category: 'JSS', level: 'JUNIOR', isCore: true, defaultPeriodCount: 5, periodsPerWeek: 5, maxPerDay: 2 },
+  { id: 'eng_jss', name: 'English', code: 'ENGL', category: 'JSS', level: 'JUNIOR', isCore: true, defaultPeriodCount: 5, periodsPerWeek: 5, maxPerDay: 2 },
+  { id: 'ins_jss', name: 'INS', code: 'INS', category: 'JSS', level: 'JUNIOR', isCore: true, defaultPeriodCount: 3, periodsPerWeek: 3, maxPerDay: 1 },
+  { id: 'lvf_jss', name: 'LVF', code: 'LVF', category: 'JSS', level: 'JUNIOR', isCore: true, defaultPeriodCount: 3, periodsPerWeek: 3, maxPerDay: 1 },
+  { id: 'scs_jss', name: 'SCS', code: 'SCS', category: 'JSS', level: 'JUNIOR', isCore: true, defaultPeriodCount: 3, periodsPerWeek: 3, maxPerDay: 1 },
+  { id: 'bus_jss', name: 'Business Studies', code: 'BUSI', category: 'JSS', level: 'JUNIOR', isCore: true, defaultPeriodCount: 3, periodsPerWeek: 3, maxPerDay: 1 },
+  { id: 'dgt_jss', name: 'DGT', code: 'DGT', category: 'JSS', level: 'JUNIOR', isCore: true, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
+  { id: 'phe_jss', name: 'PHE', code: 'PHE', category: 'JSS', level: 'JUNIOR', isCore: true, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
+  { id: 'yor_jss', name: 'Yoruba', code: 'YORU', category: 'JSS', level: 'JUNIOR', isCore: false, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
+  { id: 'nat_jss', name: 'National Values', code: 'NATI', category: 'JSS', level: 'JUNIOR', isCore: false, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
+  { id: 'rel_jss', name: 'IRS / CRS', code: 'IRS', category: 'JSS', level: 'JUNIOR', isCore: false, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
+  { id: 'fre_jss', name: 'French', code: 'FREN', category: 'JSS', level: 'JUNIOR', isCore: false, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
+  { id: 'cca_jss', name: 'CCA', code: 'CCA', category: 'JSS', level: 'JUNIOR', isCore: false, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
+  { id: 'his_jss', name: 'History', code: 'HIST', category: 'JSS', level: 'JUNIOR', isCore: false, defaultPeriodCount: 1, periodsPerWeek: 1, maxPerDay: 1 },
+  { id: 'ara_jss', name: 'Arabic', code: 'ARAB', category: 'JSS', level: 'JUNIOR', isCore: false, defaultPeriodCount: 1, periodsPerWeek: 1, maxPerDay: 1 },
 ];
 
 export const SSS_SCIENCE_SUBJECTS: Subject[] = [
-  { id: 'math_sci', name: 'Mathematics', category: 'SSS_SCIENCE', isCore: true, defaultPeriodCount: 5 },
-  { id: 'eng_sci', name: 'English', category: 'SSS_SCIENCE', isCore: true, defaultPeriodCount: 5 },
-  { id: 'phy_sci', name: 'Physics', category: 'SSS_SCIENCE', isCore: true, defaultPeriodCount: 5 },
-  { id: 'chem_sci', name: 'Chemistry', category: 'SSS_SCIENCE', isCore: true, defaultPeriodCount: 5 },
-  { id: 'bio_sci', name: 'Biology', category: 'SSS_SCIENCE', isCore: true, defaultPeriodCount: 5 },
-  { id: 'fur_sci', name: 'Further Maths / Agric', category: 'SSS_SCIENCE', isCore: false, defaultPeriodCount: 5 },
-  { id: 'geo_sci', name: 'Geography', category: 'SSS_SCIENCE', isCore: false, defaultPeriodCount: 3 },
-  { id: 'td_sci', name: 'Technical Drawing', category: 'SSS_SCIENCE', isCore: false, defaultPeriodCount: 2 },
-  { id: 'civ_sci', name: 'Civic Education', category: 'SSS_SCIENCE', isCore: false, defaultPeriodCount: 2 },
+  { id: 'math_sci', name: 'Mathematics', code: 'MATH', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: true, defaultPeriodCount: 5, periodsPerWeek: 5, maxPerDay: 2 },
+  { id: 'eng_sci', name: 'English', code: 'ENGL', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: true, defaultPeriodCount: 5, periodsPerWeek: 5, maxPerDay: 2 },
+  { id: 'civ_sci', name: 'Civic Education', code: 'CIVI', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: true, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
+  { id: 'phy_sci', name: 'Physics', code: 'PHYS', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: true, defaultPeriodCount: 4, periodsPerWeek: 4, maxPerDay: 2 },
+  { id: 'chem_sci', name: 'Chemistry', code: 'CHEM', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: true, defaultPeriodCount: 4, periodsPerWeek: 4, maxPerDay: 2 },
+  { id: 'bio_sci', name: 'Biology', code: 'BIOL', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: true, defaultPeriodCount: 4, periodsPerWeek: 4, maxPerDay: 2 },
+  { id: 'fur_sci', name: 'Further Maths / Agric', code: 'FURT', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: false, defaultPeriodCount: 4, periodsPerWeek: 4, maxPerDay: 1 },
+  { id: 'eco_sci', name: 'Economics', code: 'ECON', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: false, defaultPeriodCount: 3, periodsPerWeek: 3, maxPerDay: 1 },
+  { id: 'td_sci', name: 'Technical Drawing', code: 'TECH', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: false, defaultPeriodCount: 3, periodsPerWeek: 3, maxPerDay: 1 },
+  { id: 'dgt_sci', name: 'DGT', code: 'DGT', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: false, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
+  { id: 'yor_sci', name: 'Yoruba', code: 'YORU', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: false, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
 ];
 
 export const SSS_BC_SUBJECTS: Subject[] = [
-  { id: 'math_bc', name: 'Mathematics', category: 'SSS_BC', isCore: true, defaultPeriodCount: 5 },
-  { id: 'eng_bc', name: 'English', category: 'SSS_BC', isCore: true, defaultPeriodCount: 5 },
-  { id: 'lit_bc', name: 'Literature in English', category: 'SSS_BC', isCore: true, defaultPeriodCount: 4 },
-  { id: 'eco_bc', name: 'Economics', category: 'SSS_BC', isCore: true, defaultPeriodCount: 4 },
-  { id: 'acc_bc', name: 'Accounting', category: 'SSS_BC', isCore: true, defaultPeriodCount: 4 },
-  { id: 'dgt_bc', name: 'DGT', category: 'SSS_BC', isCore: false, defaultPeriodCount: 2 },
-  { id: 'civ_bc', name: 'Civic Education', category: 'SSS_BC', isCore: false, defaultPeriodCount: 2 },
-  { id: 'str_bc', name: 'Store Management', category: 'SSS_BC', isCore: false, defaultPeriodCount: 1 },
-  { id: 'bk_bc', name: 'Book Keeping', category: 'SSS_BC', isCore: false, defaultPeriodCount: 2 },
-  { id: 'yor_bc', name: 'Yoruba', category: 'SSS_BC', isCore: false, defaultPeriodCount: 2 },
-  { id: 'rel_bc', name: 'IRS / CRS', category: 'SSS_BC', isCore: false, defaultPeriodCount: 2 },
-  { id: 'gov_bc', name: 'Government', category: 'SSS_BC', isCore: false, defaultPeriodCount: 2 },
-  { id: 'com_bc', name: 'Commerce', category: 'SSS_BC', isCore: false, defaultPeriodCount: 2 },
+  { id: 'math_bc', name: 'Mathematics', code: 'MATH', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: true, defaultPeriodCount: 5, periodsPerWeek: 5, maxPerDay: 2 },
+  { id: 'eng_bc', name: 'English', code: 'ENGL', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: true, defaultPeriodCount: 5, periodsPerWeek: 5, maxPerDay: 2 },
+  { id: 'civ_bc', name: 'Civic Education', code: 'CIVI', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: true, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
+  { id: 'lit_bc', name: 'Literature in English', code: 'LITE', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: true, defaultPeriodCount: 4, periodsPerWeek: 4, maxPerDay: 2 },
+  { id: 'eco_bc', name: 'Economics', code: 'ECON', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: true, defaultPeriodCount: 4, periodsPerWeek: 4, maxPerDay: 2 },
+  { id: 'acc_bc', name: 'Accounting', code: 'ACCO', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: true, defaultPeriodCount: 4, periodsPerWeek: 4, maxPerDay: 2 },
+  { id: 'com_bc', name: 'Commerce', code: 'COMM', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: false, defaultPeriodCount: 3, periodsPerWeek: 3, maxPerDay: 1 },
+  { id: 'gov_bc', name: 'Government', code: 'GOVE', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: false, defaultPeriodCount: 3, periodsPerWeek: 3, maxPerDay: 1 },
+  { id: 'dgt_bc', name: 'DGT', code: 'DGT', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: false, defaultPeriodCount: 3, periodsPerWeek: 3, maxPerDay: 1 },
+  { id: 'str_bc', name: 'Store Management', code: 'STOR', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: false, defaultPeriodCount: 3, periodsPerWeek: 3, maxPerDay: 1 },
+  { id: 'bk_bc', name: 'Book Keeping', code: 'BOOK', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: false, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
 ];
 
 // Subjects where multiple teachers are assigned simultaneously to split the class
@@ -60,17 +60,17 @@ const jssClasses = [
   'JS1A', 'JS1B', 'JS1C', 'JS1D',
   'JS2A', 'JS2B', 'JS2C', 'JS2D',
   'JS3A', 'JS3B', 'JS3C'
-].map(name => ({ id: name, name, category: 'JSS' as const }));
+].map(name => ({ id: name, name, category: 'JSS' as const, level: 'JUNIOR' as const, stream: 'GENERAL' as const }));
 
 const sssSciClasses = [
   'SS1A1', 'SS1A2', 'SS1A3', 'SS1A4',
   'SS2A1', 'SS2A2', 'SS2A3', 'SS2A4',
   'SS3A1', 'SS3A2'
-].map(name => ({ id: name, name, category: 'SSS_SCIENCE' as const }));
+].map(name => ({ id: name, name, category: 'SSS_SCIENCE' as const, level: 'SENIOR' as const, stream: 'SCIENCE' as const }));
 
 const sssBcClasses = [
   'SS1BC', 'SS2BC', 'SS3BC'
-].map(name => ({ id: name, name, category: 'SSS_BC' as const }));
+].map(name => ({ id: name, name, category: 'SSS_BC' as const, level: 'SENIOR' as const, stream: 'BC' as const }));
 
 export const ALL_CLASSES: Class[] = [...jssClasses, ...sssSciClasses, ...sssBcClasses];
 

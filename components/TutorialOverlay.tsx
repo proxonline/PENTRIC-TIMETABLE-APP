@@ -21,7 +21,7 @@ export const TutorialOverlay: React.FC<Props> = ({ onComplete }) => {
     const steps = [
         {
             title: "Welcome to Pentric",
-            desc: "The comprehensive academic scheduling management system created by PPF Innovations and Technology Group.",
+            desc: "The comprehensive academic scheduling management system created by PBFA INNOVATIONS AND TECHNOLOGY (pbfa.netlify.app).",
             icon: <div className="w-20 h-20 bg-blue-600 rounded-full flex items-center justify-center text-white shadow-lg animate-bounce"><Zap size={40}/></div>
         },
         {

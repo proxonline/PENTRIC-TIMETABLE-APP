@@ -103,6 +103,26 @@
         }
       },
       "required": ["updatedAt"]
+    },
+    "SyncDiagnosticsPing": {
+      "title": "SyncDiagnosticsPing",
+      "description": "Cross-device ping message for network latency and sync testing",
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string",
+          "description": "Unique identifier of sending device"
+        },
+        "deviceLabel": {
+          "type": "string",
+          "description": "User-friendly label of sending device"
+        },
+        "timestamp": {
+          "type": "number",
+          "description": "Unix millisecond timestamp when ping was recorded"
+        }
+      },
+      "required": ["deviceId", "timestamp"]
     }
   },
   "firestore": {
@@ -113,6 +133,10 @@
     "/ota_app_store/{key}": {
       "schema": "AppStoreDoc",
       "description": "Live cross-device state synchronization store documents."
+    },
+    "/ota_sync_diagnostics/{pingId}": {
+      "schema": "SyncDiagnosticsPing",
+      "description": "Diagnostic pings exchanged between devices to monitor cross-device connectivity."
     }
   }
 }

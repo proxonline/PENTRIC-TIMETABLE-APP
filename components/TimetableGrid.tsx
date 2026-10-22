@@ -63,6 +63,7 @@ export const TimetableGrid: React.FC<Props> = ({ timetable, classId, onCellClick
 
   const getSubjectName = (id: string) => {
     if (id === 'FREE') return 'FREE';
+    if (id === 'WORSHIP') return 'Worship';
     if (id.includes('(') && id.includes(')')) return id;
     const s = ALL_SUBJECTS.find(sub => sub.id === id);
     return s ? s.name : id;
@@ -89,7 +90,15 @@ export const TimetableGrid: React.FC<Props> = ({ timetable, classId, onCellClick
   );
 
   return (
-    <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-sm relative custom-scrollbar">
+    <div className="space-y-1.5">
+      <div className="md:hidden flex items-center justify-between text-[11px] font-semibold text-slate-500 bg-slate-100/80 border border-slate-200/80 px-3 py-1.5 rounded-xl">
+        <span className="flex items-center gap-1.5">
+          <Clock size={12} className="text-blue-600" />
+          <span>Swipe horizontally to view all periods (P1 to P8)</span>
+        </span>
+        <span className="text-[10px] text-blue-600 font-bold">8 Periods</span>
+      </div>
+      <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-sm relative custom-scrollbar">
       <table className="w-full border-collapse text-left">
         <thead>
           <tr className="bg-slate-50/90 border-b border-slate-200/80 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
@@ -130,13 +139,18 @@ export const TimetableGrid: React.FC<Props> = ({ timetable, classId, onCellClick
                   );
                 }
 
-                const cell = classData?.[d]?.[col.index!];
-                const subName = cell ? getSubjectName(cell.subjectId) : '';
-                const teacherName = cell ? getTeacherNames(cell) : '';
+                const rawCell = classData?.[d]?.[col.index!];
+                // Rule 3: Enforce strict class scoping (no cross-class contamination)
+                const cell = (rawCell && rawCell.classId && rawCell.classId !== classId && classId !== 'MY_SCHEDULE') ? null : rawCell;
+                const isWorship = cell?.subjectId === 'WORSHIP';
+                const subName = cell ? (isWorship ? 'Worship' : getSubjectName(cell.subjectId)) : '';
+                const teacherName = cell && !isWorship ? getTeacherNames(cell) : '';
                 const displayClass = (cell as any)?._displayClass;
                 const roomObj = cell?.roomId ? rooms.find(r => r.id === cell.roomId) : null;
                 const roomLabel = roomObj ? roomObj.name : cell?.roomId;
-                const styleClass = cell && SUBJECT_COLORS[cell.subjectId] ? SUBJECT_COLORS[cell.subjectId] : 'bg-slate-100 text-slate-800 border-slate-200';
+                const styleClass = isWorship 
+                  ? 'bg-amber-50/90 text-amber-900 border-amber-300 font-extrabold'
+                  : (cell && SUBJECT_COLORS[cell.subjectId] ? SUBJECT_COLORS[cell.subjectId] : 'bg-slate-100 text-slate-800 border-slate-200');
 
                 return (
                   <td
@@ -150,7 +164,7 @@ export const TimetableGrid: React.FC<Props> = ({ timetable, classId, onCellClick
                       <div className={`h-full w-full rounded-xl p-2 border flex flex-col justify-between transition-all shadow-2xs relative ${
                         cell.subjectId === 'FREE' ? 'bg-slate-50 border-slate-200/60 text-slate-400' : styleClass
                       }`}>
-                        {cell.isManual && (
+                        {cell.isManual && !isWorship && (
                           <div className="absolute top-1 right-1 text-amber-500" title="Manual Lock">
                             <Lock className="w-3 h-3" />
                           </div>
@@ -166,15 +180,21 @@ export const TimetableGrid: React.FC<Props> = ({ timetable, classId, onCellClick
                           </div>
                         )}
 
-                        <div className="font-extrabold text-[11px] leading-tight truncate mt-1">
+                        <div className={`font-extrabold text-[11px] leading-tight truncate mt-1 ${isWorship ? 'text-amber-800 tracking-wide uppercase' : ''}`}>
                           {subName}
                         </div>
 
                         {cell.subjectId !== 'FREE' && (
                           <div className="text-[10px] font-bold opacity-80 truncate font-mono mt-0.5 flex flex-col">
-                            <span>{displayClass || teacherName}</span>
-                            {roomLabel && (
-                              <span className="text-[9px] text-indigo-600 font-extrabold">{roomLabel}</span>
+                            {isWorship ? (
+                              <span className="text-[9px] text-amber-700 font-semibold">Non-Teaching</span>
+                            ) : (
+                              <>
+                                <span>{displayClass || teacherName}</span>
+                                {roomLabel && (
+                                  <span className="text-[9px] text-indigo-600 font-extrabold">{roomLabel}</span>
+                                )}
+                              </>
                             )}
                           </div>
                         )}
@@ -192,5 +212,6 @@ export const TimetableGrid: React.FC<Props> = ({ timetable, classId, onCellClick
         </tbody>
       </table>
     </div>
+  </div>
   );
 };

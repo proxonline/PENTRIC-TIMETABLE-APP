@@ -32,6 +32,14 @@ export interface GeneratorConfig {
   prioritizeCoreMorning?: boolean;
 }
 
+export interface ClassAllocationSummary {
+  eligibleSlots: number;
+  requiredLessons: number;
+  additionalLessons: number;
+  totalScheduled: number;
+  unfilledSlots: number;
+}
+
 export interface ReasoningReport {
   score: number; // 0 - 100 overall timetable efficiency
   goal?: OptimizationGoal;
@@ -40,6 +48,9 @@ export interface ReasoningReport {
   hardConstraintsSatisfied: boolean;
   totalSlotsScheduled: number;
   totalSlotsRequired: number;
+  totalCurriculumRequired?: number;
+  totalAdditionalAllocated?: number;
+  classBreakdown?: Record<string, ClassAllocationSummary>;
   completionRate: number; // %
   teacherPreferenceSatisfactionRate: number; // %
   morningCoreRatio: number; // %
@@ -105,6 +116,8 @@ export interface Subject {
   code?: string;
   category: 'JUNIOR' | 'SENIOR' | 'JSS' | 'SSS_SCIENCE' | 'SSS_BC' | 'ALL';
   level?: AcademicLevel; // Explicit Junior vs Senior level
+  stream?: 'SCIENCE' | 'BC' | 'ALL'; // SS curriculum stream eligibility: SCIENCE (A), BC (Combined BC), or ALL (Common)
+  eligibleClassIds?: string[]; // Specific class IDs eligible for this subject
   isCore: boolean;
   defaultPeriodCount: number; // Number of times this subject appears per week (frequency)
   maxPerDay?: number; // Times in a day (e.g. 1 per day, 2 for double period)
@@ -119,6 +132,8 @@ export interface Class {
   name: string;
   category: 'JUNIOR' | 'SENIOR' | 'JSS' | 'SSS_SCIENCE' | 'SSS_BC';
   level?: AcademicLevel; // Explicit Junior vs Senior level
+  stream?: 'SCIENCE' | 'BC' | 'GENERAL'; // Academic stream (e.g. Science/A vs Combined BC)
+  eligibleSubjectIds?: string[]; // Specific subject IDs explicitly eligible for this class
   gradeLevel?: number;
   assignedTeacherId?: string;
   roomNumber?: string;
@@ -233,6 +248,7 @@ export interface TimetableCell {
   lessonLink?: string;
   _realClassId?: string;
   _displayClass?: string;
+  classId?: string;
 }
 
 export interface TeacherAbsence {
@@ -318,6 +334,7 @@ export interface Conflict {
   message: string;
   teacherId?: string;
   classId?: string;
+  subjectId?: string;
   day?: number;
   period?: number;
   roomId?: string;

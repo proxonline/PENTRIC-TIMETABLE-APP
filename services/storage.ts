@@ -1,5 +1,6 @@
 import { Teacher, TimetableGrid, Availability, Subject, HistoryEntry, SwapRequest, AppNotification, AppSettings, ChatMessage, AdminUser, Class, Room, ExamSession, TeacherAbsence, AuditLogEntry, School, AcademicLevel, SlotBudgetInfo } from '../types';
 import { ALL_SUBJECTS, ALL_CLASSES } from '../constants';
+import { getSubjectStream, getClassStream } from './curriculum_eligibility';
 import bcrypt from 'bcryptjs';
 import { db, doc, setDoc, deleteDoc, onSnapshot, collection, auth, signInAnonymously } from './firebase';
 
@@ -123,6 +124,12 @@ class CloudSync {
             console.warn(`[CloudSync Notice - ${operation}] Retrying with refreshed permissions...`);
             return;
         }
+        if (code === 'unavailable' || msg.includes('Could not reach Cloud Firestore backend') || msg.includes('offline')) {
+            this.isConnected = false;
+            this.connectionListeners.forEach(l => l(false));
+            console.info(`[CloudSync Notice - ${operation}] Operating in offline/local cache mode; will auto-sync when Cloud Firestore backend is reachable.`);
+            return;
+        }
         console.error(`[CloudSync Error - ${operation}] Code: ${code || 'UNKNOWN'}, Message: ${msg}`, err);
         this.recentErrors.unshift({
             timestamp: Date.now(),
@@ -184,14 +191,6 @@ class CloudSync {
                     }
                     if (k === KEYS.TEACHERS) {
                         const localTeachers: Teacher[] = safeParseArray(localStorage.getItem(KEYS.TEACHERS), []);
-                        localTeachers.forEach(lt => {
-                            if (lt && (lt.isApproved === false || lt.approvalStatus === 'PENDING')) {
-                                const exists = items.some((it: any) => it && (it.id === lt.id || it.username === lt.username));
-                                if (!exists) {
-                                    items.push(lt);
-                                }
-                            }
-                        });
                         // Preserve and synchronize profile pictures across sync updates
                         items.forEach((it: any) => {
                             if (it && it.id) {
@@ -591,99 +590,9 @@ class CloudSync {
 const cloud = new CloudSync();
 
 // --- TEACHERS GENERATOR ---
+// Clean stub for development: Real teachers are registered via faculty sign-up or admin additions.
 export function generateFullFaculty(subjectsList: Subject[] = ALL_SUBJECTS, classesList: Class[] = ALL_CLASSES): Teacher[] {
-  const teachers: Teacher[] = [];
-
-  const firstNames = [
-    'David', 'Fatima', 'Samuel', 'Grace', 'Ibrahim', 'Blessing', 'Emmanuel', 'Victoria',
-    'Timothy', 'Angela', 'Marcus', 'Helen', 'Solomon', 'Mary', 'Joseph', 'Andrew',
-    'Patience', 'Kabir', 'John', 'Ruth', 'Ahmed', 'Clement', 'Gabriel', 'Deborah',
-    'Kehinde', 'Funke', 'Patrick', 'Chidimma', 'Hassan', 'Sarah', 'Christopher', 'Victor',
-    'Rachel', 'Benjamin', 'Nkechi', 'Oluwaseun', 'Amina', 'Tunde', 'Bisi', 'Francis',
-    'Chinedu', 'Zainab', 'Olawale', 'Kemi', 'Suleiman', 'Yinka', 'Emeka', 'Titilayo'
-  ];
-  const lastNames = [
-    'Okafor', 'Bello', 'Adebayo', 'Adeleke', 'Musa', 'Ojo', 'Davies', 'Kalu',
-    'Ogundele', 'Bassey', 'Vance', 'Paul', 'King', 'Okereke', 'Taylor', 'Scott',
-    'Eze', 'Usman', 'Philip', 'Johnson', 'Ali', 'Nnamdi', 'Olatunji', 'Sowande',
-    'Popoola', 'Akindele', 'Alabi', 'Nwosu', 'Bello', 'Martins', 'Clark', 'Chen',
-    'Ekanem', 'Balogun', 'Obi', 'Ajayi', 'Sani', 'Salami', 'Omoniyi', 'Ibrahim',
-    'Ezeonu', 'Dada', 'Gbadamosi', 'Soyinka', 'Danladi', 'Lawal', 'Annan', 'Mustapha'
-  ];
-
-  let nameCounter = 0;
-
-  const buildAvailability = (): Record<number, Record<number, Availability>> => {
-    const grid: Record<number, Record<number, Availability>> = {};
-    for (let day = 0; day < 5; day++) {
-      grid[day] = {};
-      for (let period = 0; period < 8; period++) {
-        grid[day][period] = Availability.AVAILABLE;
-      }
-    }
-    return grid;
-  };
-
-  const categories: ('JSS' | 'SSS_SCIENCE' | 'SSS_BC')[] = ['JSS', 'SSS_SCIENCE', 'SSS_BC'];
-
-  categories.forEach(cat => {
-    const catSubjects = subjectsList.filter(s => s.category === cat);
-    const catClasses = classesList.filter(c => c.category === cat);
-
-    if (catSubjects.length === 0 || catClasses.length === 0) return;
-
-    catSubjects.forEach((sub, subIdx) => {
-      // Chunk classes into manageable groups of 2-3 classes per teacher
-      const chunkSize = catClasses.length >= 6 ? 3 : (catClasses.length >= 3 ? 2 : catClasses.length);
-      const classChunks: string[][] = [];
-
-      for (let i = 0; i < catClasses.length; i += chunkSize) {
-        const chunk = catClasses.slice(i, i + chunkSize).map(c => c.id);
-        classChunks.push(chunk);
-      }
-
-      // For parallel subjects (IRS/CRS, Further Maths), ensure multiple teachers cover classes
-      if (['rel_jss', 'rel_bc', 'fur_sci'].includes(sub.id) && classChunks.length < 2) {
-        if (catClasses.length > 1) {
-          classChunks.push(catClasses.slice(0, Math.ceil(catClasses.length / 2)).map(c => c.id));
-        }
-      }
-
-      classChunks.forEach((chunkClasses, chunkIdx) => {
-        const fn = firstNames[nameCounter % firstNames.length];
-        const ln = lastNames[(nameCounter + subIdx) % lastNames.length];
-        nameCounter++;
-
-        const name = `${fn} ${ln}`;
-        const username = `${fn.toLowerCase()}_${ln.toLowerCase()}_${subIdx}${chunkIdx}`;
-        const id = `t_${sub.id}_${chunkIdx}_${nameCounter}`;
-
-        // Keep subjects taught strictly balanced: 1 primary subject per teacher (or max 2 if small)
-        const subjectsTaught: string[] = [sub.id];
-        if (!sub.isCore && sub.defaultPeriodCount <= 3) {
-          const otherLight = catSubjects.find(s => s.id !== sub.id && !s.isCore && s.defaultPeriodCount <= 3);
-          if (otherLight) subjectsTaught.push(otherLight.id);
-        }
-
-        teachers.push({
-          id,
-          name,
-          username,
-          password: 'password123',
-          recoveryCode: Math.floor(100000 + Math.random() * 900000).toString(),
-          subjectsTaught: subjectsTaught.slice(0, 2), // 1 to 2 subjects
-          assignedClasses: chunkClasses.slice(0, 3),  // 2 to 3 classes
-          availability: buildAvailability(),
-          isCompleted: true,
-          bio: `Faculty member for ${cat.replace('_', ' ')} teaching ${sub.name}.`,
-          contactEmail: `${username}@school.edu`,
-          contactPhone: `+234 80${Math.floor(10000000 + Math.random() * 90000000)}`
-        });
-      });
-    });
-  });
-
-  return teachers;
+  return [];
 }
 
 export const storage = {
@@ -737,12 +646,16 @@ export const storage = {
           ? sub.defaultPeriodCount 
           : (typeof sub.periodsPerWeek === 'number' && sub.periodsPerWeek > 0 ? sub.periodsPerWeek : 3);
 
+      const stream = sub.stream || (level === 'SENIOR' ? getSubjectStream(sub) : 'ALL');
+
       return {
           id: sub.id,
           name: sub.name,
           code: sub.code || (sub.name ? sub.name.substring(0, 4).toUpperCase() : 'SUBJ'),
           category: level,
           level,
+          stream,
+          eligibleClassIds: Array.isArray(sub.eligibleClassIds) ? sub.eligibleClassIds : undefined,
           isCore: !!sub.isCore,
           defaultPeriodCount: periodsPerWeek,
           periodsPerWeek,
@@ -758,11 +671,15 @@ export const storage = {
           ? (cls.level === 'JUNIOR' ? 'JUNIOR' : 'SENIOR')
           : (cls.category === 'JSS' || cls.category === 'JUNIOR' ? 'JUNIOR' : 'SENIOR');
 
+      const stream = cls.stream || (level === 'SENIOR' ? getClassStream(cls) : 'GENERAL');
+
       return {
           id: cls.id,
           name: cls.name,
           category: level,
           level,
+          stream,
+          eligibleSubjectIds: Array.isArray(cls.eligibleSubjectIds) ? cls.eligibleSubjectIds : undefined,
           gradeLevel: cls.gradeLevel,
           assignedTeacherId: cls.assignedTeacherId,
           roomNumber: cls.roomNumber
@@ -803,11 +720,24 @@ export const storage = {
   getSubjects: (): Subject[] => {
       const data = localStorage.getItem(KEYS.SUBJECTS);
       const rawSubjects = safeParseArray<any>(data, []);
+      const currentSchool = storage.getCurrentSchool();
+      const isOta = !currentSchool || currentSchool.isOta || currentSchool.code === 'OTA' || currentSchool.id === 'ota_total_academy';
+
       if (rawSubjects.length > 0) {
           // Normalize and preserve exact user customized period counts
-          return rawSubjects
+          const normalized = rawSubjects
               .filter(s => s && (s.id || s.name))
               .map(s => storage.normalizeSubject(s));
+
+          // If current school is OTA Total Academy, filter out any outdated Geography entries
+          if (isOta) {
+              return normalized.filter(s => {
+                  const code = (s.code || s.id || s.name || '').toUpperCase();
+                  const name = (s.name || '').toUpperCase();
+                  return !(code.startsWith('GEOG') || code.startsWith('GEO') || name.includes('GEOGRAPHY'));
+              });
+          }
+          return normalized;
       }
       const initial = ALL_SUBJECTS.map(s => storage.normalizeSubject(s));
       localStorage.setItem(KEYS.SUBJECTS, JSON.stringify(initial));
@@ -858,49 +788,37 @@ export const storage = {
   getTeachers: (): Teacher[] => {
     const data = localStorage.getItem(KEYS.TEACHERS);
     let teachers: Teacher[] = safeParseArray<Teacher>(data, []);
+    if (!teachers) teachers = [];
 
-    if (!teachers || teachers.length === 0) {
-      teachers = generateFullFaculty(ALL_SUBJECTS, ALL_CLASSES);
-      teachers.forEach(t => {
-        if (!t.calendarToken) t.calendarToken = 'cal_' + Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+    let modified = false;
+    teachers.forEach(t => {
+      if (t && t.id) {
+        const pic = localStorage.getItem(`ota_profile_pic_${t.id}`);
+        if (pic) {
+          if (t.profilePicture !== pic) {
+            t.profilePicture = pic;
+            modified = true;
+          }
+        } else if (t.profilePicture) {
+          try {
+            localStorage.setItem(`ota_profile_pic_${t.id}`, t.profilePicture);
+          } catch {}
+        }
+      }
+      if (t && !t.calendarToken) {
+        t.calendarToken = 'cal_' + Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+        modified = true;
+      }
+      if (t && t.isApproved === undefined && t.approvalStatus === undefined) {
         t.isApproved = true;
         t.approvalStatus = 'APPROVED';
-        t.schoolId = 'ota_total_academy';
-      });
-      localStorage.setItem(KEYS.TEACHERS, JSON.stringify(teachers));
-      // NOTE: Do not call cloud.pushUpdates here to avoid wiping registered teachers before cloud sync resolves
-    } else {
-      let modified = false;
-      teachers.forEach(t => {
-        if (t && t.id) {
-          const pic = localStorage.getItem(`ota_profile_pic_${t.id}`);
-          if (pic) {
-            if (t.profilePicture !== pic) {
-              t.profilePicture = pic;
-              modified = true;
-            }
-          } else if (t.profilePicture) {
-            try {
-              localStorage.setItem(`ota_profile_pic_${t.id}`, t.profilePicture);
-            } catch {}
-          }
-        }
-        if (t && !t.calendarToken) {
-          t.calendarToken = 'cal_' + Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
-          modified = true;
-        }
-        if (t && t.isApproved === undefined && t.approvalStatus === undefined) {
-          t.isApproved = true;
-          t.approvalStatus = 'APPROVED';
-          t.schoolId = t.schoolId || 'ota_total_academy';
-          modified = true;
-        }
-      });
-      if (modified) {
-        localStorage.setItem(KEYS.TEACHERS, JSON.stringify(teachers));
+        t.schoolId = t.schoolId || 'ota_total_academy';
+        modified = true;
       }
+    });
+    if (modified) {
+      localStorage.setItem(KEYS.TEACHERS, JSON.stringify(teachers));
     }
-    
     return teachers;
   },
   
@@ -1043,7 +961,11 @@ export const storage = {
       const admins = storage.getAdmins();
       const idx = admins.findIndex(a => a.id === id);
       if (idx !== -1) {
-          admins[idx] = { ...admins[idx], ...updates };
+          const formattedUpdates = { ...updates };
+          if (formattedUpdates.password && !/^\$2[aby]\$/.test(formattedUpdates.password)) {
+            formattedUpdates.password = bcrypt.hashSync(formattedUpdates.password, 10);
+          }
+          admins[idx] = { ...admins[idx], ...formattedUpdates };
           localStorage.setItem(KEYS.ADMINS, JSON.stringify(admins));
           cloud.pushItem(KEYS.ADMINS, id, admins[idx]);
       }
@@ -1866,5 +1788,7 @@ export const storage = {
       // NOTE: We do not clear ADMINS, SETTINGS or TUTORIAL_SEEN to prevent lockout/annoyance
   },
 
+  cloudSync: cloud,
+  getRecentErrors: () => cloud.getRecentErrors(),
   fetchLatestFromApi: (forceFull?: boolean) => cloud.fetchLatestFromApi(forceFull)
 };

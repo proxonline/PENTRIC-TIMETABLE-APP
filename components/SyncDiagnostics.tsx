@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot, setDoc, doc } from 'firebase/firestore';
-import { db } from '../services/firebase';
+import { db, auth, signInAnonymously } from '../services/firebase';
 import { storage } from '../services/storage';
 import { Send, Activity, RefreshCw, AlertTriangle, CheckCircle, Smartphone, Clock, ShieldAlert } from 'lucide-react';
 
@@ -20,6 +20,7 @@ export const SyncDiagnostics: React.FC = () => {
   const [sendSuccess, setSendSuccess] = useState<boolean>(false);
   const [subError, setSubError] = useState<string | null>(null);
   const [recentErrors, setRecentErrors] = useState<any[]>([]);
+  const [retryCount, setRetryCount] = useState<number>(0);
 
   useEffect(() => {
     // Generate or fetch unique persistent device ID
@@ -44,37 +45,66 @@ export const SyncDiagnostics: React.FC = () => {
     } catch {}
 
     // Live subscription to ota_sync_diagnostics Firestore collection
+    let isCancelled = false;
     let unsubscribe: () => void = () => {};
-    try {
-      const coll = collection(db, 'ota_sync_diagnostics');
-      unsubscribe = onSnapshot(coll, (snapshot) => {
-        setSubError(null);
-        const docsList: PingDoc[] = [];
-        snapshot.forEach((docSnap) => {
-          const data = docSnap.data();
-          if (data) {
-            docsList.push({
-              id: docSnap.id,
-              deviceId: data.deviceId || 'Unknown',
-              deviceLabel: data.deviceLabel || 'Unnamed Device',
-              timestamp: typeof data.timestamp === 'number' ? data.timestamp : Date.now()
-            });
+
+    const attachListener = async () => {
+      try {
+        if (auth && !auth.currentUser) {
+          try {
+            await signInAnonymously(auth);
+          } catch {
+            // anonymous auth optional when rules allow public access
+          }
+        }
+        if (isCancelled) return;
+
+        const coll = collection(db, 'ota_sync_diagnostics');
+        unsubscribe = onSnapshot(coll, (snapshot) => {
+          setSubError(null);
+          const docsList: PingDoc[] = [];
+          snapshot.forEach((docSnap) => {
+            const data = docSnap.data();
+            if (data) {
+              docsList.push({
+                id: docSnap.id,
+                deviceId: data.deviceId || 'Unknown',
+                deviceLabel: data.deviceLabel || 'Unnamed Device',
+                timestamp: typeof data.timestamp === 'number' ? data.timestamp : Date.now()
+              });
+            }
+          });
+          docsList.sort((a, b) => b.timestamp - a.timestamp);
+          setPings(docsList);
+        }, async (err: any) => {
+          const code = err?.code || '';
+          const msg = err?.message || String(err);
+          setSubError(`${code ? `[Code: ${code}] ` : ''}${msg}`);
+          console.warn('Sync Diagnostics snapshot status:', code, msg);
+
+          if (code === 'permission-denied') {
+            if (auth && !auth.currentUser) {
+              try {
+                await signInAnonymously(auth);
+                setTimeout(() => {
+                  if (!isCancelled) setRetryCount(c => c + 1);
+                }, 2000);
+              } catch {}
+            }
           }
         });
-        docsList.sort((a, b) => b.timestamp - a.timestamp);
-        setPings(docsList);
-      }, (err: any) => {
-        const code = err?.code ? `[Code: ${err.code}] ` : '';
-        const msg = err?.message || String(err);
-        setSubError(`${code}${msg}`);
-        console.error('Sync Diagnostics onSnapshot error:', err);
-      });
-    } catch (e: any) {
-      setSubError(`Failed to attach snapshot listener: ${e?.message || String(e)}`);
-    }
+      } catch (e: any) {
+        setSubError(`Failed to attach snapshot listener: ${e?.message || String(e)}`);
+      }
+    };
 
-    return () => unsubscribe();
-  }, []);
+    attachListener();
+
+    return () => {
+      isCancelled = true;
+      unsubscribe();
+    };
+  }, [retryCount]);
 
   const handleLabelChange = (val: string) => {
     setDeviceLabel(val);
@@ -199,12 +229,24 @@ export const SyncDiagnostics: React.FC = () => {
 
       {/* Subscription Error Alert */}
       {subError && (
-        <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-xl p-4 flex items-start gap-3 text-sm">
-          <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-          <div>
-            <div className="font-bold">Live Listener Error</div>
-            <div className="font-mono text-xs mt-1 bg-amber-100 p-2 rounded">{subError}</div>
+        <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-xl p-4 flex items-start justify-between gap-3 text-sm">
+          <div className="flex items-start gap-3">
+            <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <div className="font-bold">Live Listener Status</div>
+              <div className="font-mono text-xs mt-1 bg-amber-100 p-2 rounded">{subError}</div>
+            </div>
           </div>
+          <button
+            onClick={() => {
+              setSubError(null);
+              setRetryCount(c => c + 1);
+            }}
+            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold shrink-0 transition flex items-center gap-1.5"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Retry
+          </button>
         </div>
       )}
 

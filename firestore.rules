@@ -2,11 +2,6 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Default deny all unknown collections
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
     // Helper functions
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
@@ -43,7 +38,7 @@ service cloud.firestore {
     // - Create/Update: Validates schema and ID
     // - Delete: Validates ID and prevents deletion of the default founding school
     match /schools/{schoolId} {
-      allow get, list: if isValidId(schoolId);
+      allow read: if true;
       allow create, update: if isValidId(schoolId) && isValidSchool(incoming()) && incoming().id == schoolId;
       allow delete: if isValidId(schoolId) && schoolId != 'ota_total_academy';
     }
@@ -51,6 +46,16 @@ service cloud.firestore {
     // Dynamic application sync collection
     match /ota_app_store/{key} {
       allow read, write: if true;
+    }
+
+    // Cross-device Sync Diagnostics collection
+    match /ota_sync_diagnostics/{pingId} {
+      allow read, write: if true;
+    }
+
+    // Default deny all unknown collections
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

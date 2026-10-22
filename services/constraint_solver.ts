@@ -1,5 +1,6 @@
-import { Teacher, Class, Subject, TimetableGrid, TimetableCell, Conflict, GeneratorConfig, Availability, OptimizationGoal, ReasoningReport } from '../types';
+import { Teacher, Class, Subject, TimetableGrid, TimetableCell, Conflict, GeneratorConfig, Availability, OptimizationGoal, ReasoningReport, ClassAllocationSummary } from '../types';
 import { PARALLEL_SUBJECTS, DAYS } from '../constants';
+import { getEligibleSubjectsForClass } from './curriculum_eligibility';
 
 const MAX_PERIODS = 8;
 const DAYS_COUNT = 5;
@@ -48,9 +49,11 @@ export class ConstraintSolver {
     private onProgress?: (progress: number, message: string) => void;
     private onSync?: (grid: TimetableGrid) => void;
     private lastYieldTime = 0;
+    private lastSyncTime = 0;
 
     private aborted = false;
     private totalRequiredSlots = 0;
+    private totalCurriculumRequiredSlots = 0;
     private bottleneckList: Set<string> = new Set();
 
     constructor(
@@ -85,13 +88,25 @@ export class ConstraintSolver {
             classDailyCoreCount: Array.from({ length: classes.length }, () => new Array(DAYS_COUNT).fill(0))
         };
 
-        // Initialize Grid Structure
+        // Initialize Grid Structure and reserve Friday Worship (Rule 2)
         classes.forEach(c => {
             this.state.grid[c.id] = {};
             for (let d = 0; d < DAYS_COUNT; d++) {
                 this.state.grid[c.id][d] = {};
                 for (let p = 0; p < MAX_PERIODS; p++) {
-                    this.state.grid[c.id][d][p] = null;
+                    // Rule 2: Friday worship — final two periods only (P7 & P8 for 8-period timetable)
+                    if (d === 4 && p >= MAX_PERIODS - 2) {
+                        this.state.grid[c.id][d][p] = {
+                            subjectId: 'WORSHIP',
+                            teacherId: 'SYSTEM',
+                            teacherIds: ['SYSTEM'],
+                            isManual: true,
+                            isDouble: false,
+                            classId: c.id
+                        };
+                    } else {
+                        this.state.grid[c.id][d][p] = null;
+                    }
                 }
             }
         });
@@ -129,15 +144,22 @@ export class ConstraintSolver {
     }
 
     private isMandatedFreeSlot(category: string, day: number, period: number): boolean {
-        // Friday (Index 4) Logic
-        if (day === 4) {
-            if (category === 'JSS') return period >= 5; // JSS closes after P5 (P6, P7, P8 free)
-            if (category.startsWith('SSS')) return period >= 6; // SSS closes after P6 (P7, P8 free)
+        // Rule 2: Friday final two periods are explicitly reserved for worship
+        if (day === 4 && period >= MAX_PERIODS - 2) {
+            return true;
         }
         return false;
     }
 
+    private isStrictMorningCore(subjectId: string): boolean {
+        const id = subjectId.toLowerCase();
+        return id.startsWith('math') || id.includes('math') || id.startsWith('eng') || id.includes('eng');
+    }
+
     private prepareTasks(existingGrid?: TimetableGrid) {
+        this.totalRequiredSlots = 0;
+        this.totalCurriculumRequiredSlots = 0;
+
         // 1. Process Manual Locks from Existing Grid
         const manualSubjectCounts: Record<string, Record<string, number>> = {}; // classId -> subjectId -> count
 
@@ -149,7 +171,7 @@ export class ConstraintSolver {
                 for (let d = 0; d < DAYS_COUNT; d++) {
                     for (let p = 0; p < MAX_PERIODS; p++) {
                         const cell = existingGrid[cId]?.[d]?.[p];
-                        if (cell && cell.isManual) {
+                        if (cell && cell.isManual && cell.subjectId !== 'FREE' && cell.subjectId !== 'WORSHIP') {
                             this.applyManualLock(cId, d, p, cell);
                             manualSubjectCounts[cId][cell.subjectId] = (manualSubjectCounts[cId][cell.subjectId] || 0) + 1;
                         }
@@ -160,160 +182,161 @@ export class ConstraintSolver {
 
         // Track projected period counts to prevent overloading individual teachers
         const teacherPeriodCounts = new Map<string, number>();
+        const eligibleTeachingSlotsPerClass = (DAYS_COUNT * MAX_PERIODS) - 2; // 38 slots
 
-        // 2. Generate Tasks for each class
-        for (const classObj of this.classes) {
-            const classLevel = classObj.level || (classObj.category === 'JSS' || classObj.category === 'JUNIOR' ? 'JUNIOR' : 'SENIOR');
-            
-            // Match subjects for this class's academic level (Junior vs Senior)
-            const classSubjects = this.subjects.filter(s => {
-                const sLevel = s.level || (s.category === 'JSS' || s.category === 'JUNIOR' ? 'JUNIOR' : 'SENIOR');
-                return sLevel === classLevel || s.category === classObj.category || s.category === 'ALL';
-            });
+        // Helper to select qualified teacher(s) for a class and subject
+        const assignTeachersForSubject = (classObj: Class, sub: Subject, countNeeded: number): string[] => {
+            let teacherIds: string[] = [];
 
-            // Calculate available slots
-            let availableSlots = 0;
-            for (let d = 0; d < DAYS_COUNT; d++) {
-                for (let p = 0; p < MAX_PERIODS; p++) {
-                    if (!this.state.grid[classObj.id][d][p]) {
-                        availableSlots++;
+            // 1. Direct Administrator Assignment or Preferred Teacher
+            if (sub.preferredTeacherId && this.teachers.some(t => t.id === sub.preferredTeacherId)) {
+                teacherIds = [sub.preferredTeacherId];
+            } else if (sub.assignedTeacherIds && sub.assignedTeacherIds.length > 0) {
+                const validTids = sub.assignedTeacherIds.filter(id => this.teachers.some(t => t.id === id));
+                if (validTids.length > 0) {
+                    teacherIds = validTids;
+                }
+            }
+
+            if (teacherIds.length === 0) {
+                if (PARALLEL_SUBJECTS.includes(sub.id)) {
+                    const classAssigned = this.teachers.filter(t => t.subjectsTaught.includes(sub.id) && t.assignedClasses.includes(classObj.id));
+                    const assignedTeachers = classAssigned.length > 0 ? classAssigned : this.teachers.filter(t => t.subjectsTaught.includes(sub.id));
+                    const underloaded = assignedTeachers.filter(t => ((teacherPeriodCounts.get(t.id) || 0) + countNeeded) <= 35);
+                    const selected = underloaded.length > 0 ? underloaded : (assignedTeachers.length > 0 ? [assignedTeachers.sort((a, b) => (teacherPeriodCounts.get(a.id) || 0) - (teacherPeriodCounts.get(b.id) || 0))[0]] : []);
+                    teacherIds = selected.map(t => t.id);
+                } else {
+                    const classAssigned = this.teachers.filter(t => t.subjectsTaught.includes(sub.id) && t.assignedClasses.includes(classObj.id));
+                    const allQualified = this.teachers.filter(t => t.subjectsTaught.includes(sub.id));
+
+                    let selectedTeacher: Teacher | undefined;
+
+                    // Prefer teacher assigned to class with load <= 28
+                    const underloadedClassTeachers = classAssigned.filter(t => ((teacherPeriodCounts.get(t.id) || 0) + countNeeded) <= 28);
+                    if (underloadedClassTeachers.length > 0) {
+                        underloadedClassTeachers.sort((a, b) => (teacherPeriodCounts.get(a.id) || 0) - (teacherPeriodCounts.get(b.id) || 0));
+                        selectedTeacher = underloadedClassTeachers[0];
+                    } else {
+                        // Secondary: any teacher in school with load <= 28
+                        const underloadedSchoolTeachers = allQualified.filter(t => ((teacherPeriodCounts.get(t.id) || 0) + countNeeded) <= 28);
+                        if (underloadedSchoolTeachers.length > 0) {
+                            underloadedSchoolTeachers.sort((a, b) => (teacherPeriodCounts.get(a.id) || 0) - (teacherPeriodCounts.get(b.id) || 0));
+                            selectedTeacher = underloadedSchoolTeachers[0];
+                        } else if (classAssigned.length > 0) {
+                            classAssigned.sort((a, b) => (teacherPeriodCounts.get(a.id) || 0) - (teacherPeriodCounts.get(b.id) || 0));
+                            selectedTeacher = classAssigned[0];
+                        } else if (allQualified.length > 0) {
+                            allQualified.sort((a, b) => (teacherPeriodCounts.get(a.id) || 0) - (teacherPeriodCounts.get(b.id) || 0));
+                            selectedTeacher = allQualified[0];
+                        }
+                    }
+
+                    if (selectedTeacher) {
+                        teacherIds = [selectedTeacher.id];
                     }
                 }
             }
 
-            const subjectCounts = new Map<string, number>();
-            let totalRequested = 0;
-            
+            if (teacherIds.length > 0) {
+                teacherIds.forEach(tid => {
+                    teacherPeriodCounts.set(tid, (teacherPeriodCounts.get(tid) || 0) + countNeeded);
+                });
+            } else {
+                if (this.teachers.length > 0) {
+                    this.bottlenecks.add(`Teacher Capacity Shortage: No qualified teacher available to teach ${sub.name} in ${classObj.name}.`);
+                } else {
+                    this.bottlenecks.add(`Missing Faculty Data: No teachers registered in school to teach ${sub.name} for ${classObj.name}.`);
+                }
+            }
+
+            return teacherIds;
+        };
+
+        // 2. Generate Tasks for each class strictly matching configured curriculum frequencies
+        for (const classObj of this.classes) {
+            const classSubjects = getEligibleSubjectsForClass(classObj, this.subjects);
+
+            let classReqTotal = 0;
             for (const sub of classSubjects) {
                 const manualCount = manualSubjectCounts[classObj.id]?.[sub.id] || 0;
                 const requestedCount = sub.defaultPeriodCount || sub.periodsPerWeek || 3;
-                let count = Math.max(0, requestedCount - manualCount);
-                subjectCounts.set(sub.id, count);
-                totalRequested += count;
-            }
+                this.totalCurriculumRequiredSlots += requestedCount;
+                this.totalRequiredSlots += requestedCount;
 
-            if (totalRequested > availableSlots) {
-                this.bottlenecks.add(`${classObj.name} has ${totalRequested} periods assigned, exceeding the ${availableSlots} available slots.`);
-            }
+                const countNeeded = Math.max(0, requestedCount - manualCount);
+                if (countNeeded <= 0) continue;
 
-            // Generate Tasks exactly as configured by Administrator
-            for (const sub of classSubjects) {
-                let count = subjectCounts.get(sub.id)!;
-                if (count <= 0) continue;
-
-                let teacherIds: string[] = [];
-                
-                // 1. Direct Administrator Assignment or Preferred Teacher
-                if (sub.preferredTeacherId && this.teachers.some(t => t.id === sub.preferredTeacherId)) {
-                    teacherIds = [sub.preferredTeacherId];
-                    teacherPeriodCounts.set(sub.preferredTeacherId, (teacherPeriodCounts.get(sub.preferredTeacherId) || 0) + count);
-                } else if (sub.assignedTeacherIds && sub.assignedTeacherIds.length > 0) {
-                    const validTids = sub.assignedTeacherIds.filter(id => this.teachers.some(t => t.id === id));
-                    if (validTids.length > 0) {
-                        teacherIds = validTids;
-                        validTids.forEach(tid => {
-                            teacherPeriodCounts.set(tid, (teacherPeriodCounts.get(tid) || 0) + count);
-                        });
-                    }
-                }
-
-                if (teacherIds.length === 0) {
-                    if (PARALLEL_SUBJECTS.includes(sub.id)) {
-                        const classAssigned = this.teachers.filter(t => t.subjectsTaught.includes(sub.id) && t.assignedClasses.includes(classObj.id));
-                        const assignedTeachers = classAssigned.length > 0 ? classAssigned : this.teachers.filter(t => t.subjectsTaught.includes(sub.id));
-                        teacherIds = assignedTeachers.length > 0 ? assignedTeachers.map(t => t.id) : ['SYSTEM'];
-                        teacherIds.forEach(tid => {
-                            if (tid !== 'SYSTEM') {
-                                teacherPeriodCounts.set(tid, (teacherPeriodCounts.get(tid) || 0) + count);
-                            }
-                        });
-                    } else {
-                        const classAssigned = this.teachers.filter(t => t.subjectsTaught.includes(sub.id) && t.assignedClasses.includes(classObj.id));
-                        const allQualified = this.teachers.filter(t => t.subjectsTaught.includes(sub.id));
-
-                        let selectedTeacher: Teacher | undefined;
-
-                        // Prefer teacher assigned to class with load <= 28
-                        const underloadedClassTeachers = classAssigned.filter(t => ((teacherPeriodCounts.get(t.id) || 0) + count) <= 28);
-                        if (underloadedClassTeachers.length > 0) {
-                            underloadedClassTeachers.sort((a, b) => (teacherPeriodCounts.get(a.id) || 0) - (teacherPeriodCounts.get(b.id) || 0));
-                            selectedTeacher = underloadedClassTeachers[0];
-                        } else {
-                            // Secondary: any teacher in school with load <= 28
-                            const underloadedSchoolTeachers = allQualified.filter(t => ((teacherPeriodCounts.get(t.id) || 0) + count) <= 28);
-                            if (underloadedSchoolTeachers.length > 0) {
-                                underloadedSchoolTeachers.sort((a, b) => (teacherPeriodCounts.get(a.id) || 0) - (teacherPeriodCounts.get(b.id) || 0));
-                                selectedTeacher = underloadedSchoolTeachers[0];
-                            } else if (classAssigned.length > 0) {
-                                classAssigned.sort((a, b) => (teacherPeriodCounts.get(a.id) || 0) - (teacherPeriodCounts.get(b.id) || 0));
-                                selectedTeacher = classAssigned[0];
-                            } else if (allQualified.length > 0) {
-                                allQualified.sort((a, b) => (teacherPeriodCounts.get(a.id) || 0) - (teacherPeriodCounts.get(b.id) || 0));
-                                selectedTeacher = allQualified[0];
-                            }
-                        }
-
-                        if (selectedTeacher) {
-                            teacherIds = [selectedTeacher.id];
-                            teacherPeriodCounts.set(selectedTeacher.id, (teacherPeriodCounts.get(selectedTeacher.id) || 0) + count);
-                        } else {
-                            teacherIds = ['SYSTEM'];
-                            this.bottlenecks.add(`No teacher assigned for ${sub.name} in ${classObj.name}. Using system placeholder.`);
-                        }
-                    }
-                }
-
+                classReqTotal += countNeeded;
+                const teacherIds = assignTeachersForSubject(classObj, sub, countNeeded);
                 const teacherLoad = teacherIds.reduce((acc, tid) => acc + (teacherPeriodCounts.get(tid) || 0), 0);
-                const maxPerDay = sub.maxPerDay || (count >= 5 ? 2 : 1);
 
-                // Double Periods allowed only if maxPerDay >= 2 and configured
-                if (!this.config.forceSinglePeriods && maxPerDay >= 2 && sub.isCore && count >= 4) {
+                for (let i = 0; i < countNeeded; i++) {
+                    const isDailyCore = requestedCount === 5 && this.isStrictMorningCore(sub.id);
                     this.tasks.push({
-                        id: `${classObj.id}-${sub.id}-DOUBLE`,
-                        classId: classObj.id,
-                        subjectId: sub.id,
-                        subjectName: sub.name,
-                        teacherIds,
-                        duration: 2,
-                        isFixed: false,
-                        priority: 10,
-                        teacherLoad,
-                        isCore: sub.isCore
-                    });
-                    count -= 2;
-                    this.totalRequiredSlots += 2;
-                }
-
-                // Single Periods
-                while (count > 0) {
-                    this.tasks.push({
-                        id: `${classObj.id}-${sub.id}-${count}`,
+                        id: `${classObj.id}-${sub.id}-${i + 1}`,
                         classId: classObj.id,
                         subjectId: sub.id,
                         subjectName: sub.name,
                         teacherIds,
                         duration: 1,
                         isFixed: false,
-                        priority: sub.isCore ? 5 : 1,
+                        fixedDay: isDailyCore && i < 5 ? i : undefined,
+                        priority: sub.isCore ? 5 : 2,
                         teacherLoad,
                         isCore: sub.isCore
                     });
-                    count--;
-                    this.totalRequiredSlots += 1;
                 }
+            }
+
+            if (classReqTotal > eligibleTeachingSlotsPerClass) {
+                this.bottlenecks.add(`${classObj.name} has ${classReqTotal} required curriculum periods assigned, exceeding the ${eligibleTeachingSlotsPerClass} available slots.`);
             }
         }
 
-        // Group tasks by classId so depth-first search completes each class locally
-        this.tasks.sort((a, b) => {
-            if (a.classId !== b.classId) {
-                return a.classId.localeCompare(b.classId);
-            }
-            if (a.duration !== b.duration) return b.duration - a.duration;
-            if (a.isCore !== b.isCore) return a.isCore ? -1 : 1;
-            if (a.teacherLoad !== b.teacherLoad) return b.teacherLoad - a.teacherLoad;
-            return b.priority - a.priority;
-        });
+        // Group tasks by class, then INTERLEAVE subjects round-robin with rotated starting subject
+        // so tasks of the same subject do not sequentially monopolize period 0 / 1 across all 5 weekdays
+        const classTaskMap = new Map<string, Task[]>();
+        for (const task of this.tasks) {
+            if (!classTaskMap.has(task.classId)) classTaskMap.set(task.classId, []);
+            classTaskMap.get(task.classId)!.push(task);
+        }
+
+        const interleavedTasks: Task[] = [];
+        for (const [, cTasks] of classTaskMap.entries()) {
+            const coreTasks = cTasks.filter(t => t.isCore);
+            const nonCoreTasks = cTasks.filter(t => !t.isCore);
+
+            const interleaveGroup = (group: Task[]): Task[] => {
+                const subMap = new Map<string, Task[]>();
+                for (const t of group) {
+                    if (!subMap.has(t.subjectId)) subMap.set(t.subjectId, []);
+                    subMap.get(t.subjectId)!.push(t);
+                }
+                const subEntries = Array.from(subMap.entries());
+                const res: Task[] = [];
+                let round = 0;
+                let hasMore = true;
+                while (hasMore) {
+                    hasMore = false;
+                    // Rotate the starting subject in each round to distribute morning and afternoon slots
+                    const offset = round % Math.max(1, subEntries.length);
+                    for (let i = 0; i < subEntries.length; i++) {
+                        const idx = (i + offset) % subEntries.length;
+                        const subTasks = subEntries[idx][1];
+                        if (round < subTasks.length) {
+                            res.push(subTasks[round]);
+                            hasMore = true;
+                        }
+                    }
+                    round++;
+                }
+                return res;
+            };
+
+            interleavedTasks.push(...interleaveGroup(coreTasks), ...interleaveGroup(nonCoreTasks));
+        }
+
+        this.tasks = interleavedTasks;
     }
 
     private applyManualLock(classId: string, d: number, p: number, cell: TimetableCell) {
@@ -351,18 +374,210 @@ export class ConstraintSolver {
         
         const success = await this.backtrack(0);
         if (success) {
+            this.optimizeWeeklyVariety();
+            if (this.onSync) {
+                this.onSync(JSON.parse(JSON.stringify(this.state.grid)));
+            }
             return { success: true, grid: this.state.grid };
         }
 
-        // If backtracking yielded a partial solution, restore best state and fill unplaced tasks
+        // If backtracking yielded a partial solution, restore best state and rebuild tracking structures
         if (this.bestSolution) {
             this.state.grid = JSON.parse(JSON.stringify(this.bestSolution));
         }
+        this.rebuildStateFromGrid();
 
         this.fillUnplacedTasks();
+        this.optimizeWeeklyVariety();
+
+        if (this.onSync) {
+            this.onSync(JSON.parse(JSON.stringify(this.state.grid)));
+        }
 
         const isComplete = this.isCompleteGrid();
         return { success: isComplete, grid: this.state.grid };
+    }
+
+    public optimizeWeeklyVariety() {
+        const calculateRepetitionScore = (cId: string): number => {
+            let score = 0;
+            // 1. Same subject in same period across different days (Section 4.A)
+            for (let p = 0; p < MAX_PERIODS; p++) {
+                const subCounts: Record<string, number> = {};
+                for (let d = 0; d < DAYS_COUNT; d++) {
+                    const sid = this.state.grid[cId]?.[d]?.[p]?.subjectId;
+                    if (sid && sid !== 'FREE' && sid !== 'WORSHIP') {
+                        subCounts[sid] = (subCounts[sid] || 0) + 1;
+                    }
+                }
+                for (const count of Object.values(subCounts)) {
+                    if (count > 1) {
+                        score += (count - 1) * 100;
+                    }
+                }
+            }
+            // 2. Identical 2-subject sequences across different days (Section 4.B)
+            for (let d1 = 0; d1 < DAYS_COUNT; d1++) {
+                for (let d2 = d1 + 1; d2 < DAYS_COUNT; d2++) {
+                    for (let p = 0; p < MAX_PERIODS - 1; p++) {
+                        const s1A = this.state.grid[cId]?.[d1]?.[p]?.subjectId;
+                        const s1B = this.state.grid[cId]?.[d1]?.[p + 1]?.subjectId;
+                        const s2A = this.state.grid[cId]?.[d2]?.[p]?.subjectId;
+                        const s2B = this.state.grid[cId]?.[d2]?.[p + 1]?.subjectId;
+                        if (s1A && s1B && s1A === s2A && s1B === s2B && s1A !== 'FREE' && s1A !== 'WORSHIP') {
+                            score += 40;
+                        }
+                    }
+                }
+            }
+            return score;
+        };
+
+        for (const classObj of this.classes) {
+            const cId = classObj.id;
+            const cIdx = this.classToIndex.get(cId);
+            if (cIdx === undefined) continue;
+
+            let improved = true;
+            let passes = 0;
+            const maxPasses = 6;
+
+            while (improved && passes < maxPasses) {
+                improved = false;
+                passes++;
+                let currentScore = calculateRepetitionScore(cId);
+                if (currentScore === 0) break;
+
+                for (let d = 0; d < DAYS_COUNT; d++) {
+                    for (let p1 = 0; p1 < MAX_PERIODS; p1++) {
+                        for (let p2 = p1 + 1; p2 < MAX_PERIODS; p2++) {
+                            const cell1 = this.state.grid[cId]?.[d]?.[p1];
+                            const cell2 = this.state.grid[cId]?.[d]?.[p2];
+                            if (!cell1 || !cell2) continue;
+                            if (cell1.subjectId === 'WORSHIP' || cell2.subjectId === 'WORSHIP') continue;
+                            if (cell1.isManual || cell2.isManual) continue;
+                            if (cell1.subjectId === cell2.subjectId) continue;
+                            if (cell1.subjectId === 'FREE' || cell2.subjectId === 'FREE') continue;
+
+                            const sub1 = this.subjects.find(s => s.id === cell1.subjectId);
+                            const sub2 = this.subjects.find(s => s.id === cell2.subjectId);
+
+                            // Section 2: Core timing discipline. Keep core in periods 0..3 (P1..P4)
+                            if (this.isStrictMorningCore(cell1.subjectId) && p2 >= 4) continue;
+                            if (this.isStrictMorningCore(cell2.subjectId) && p1 >= 4) continue;
+                            if (sub1?.isCore && p2 >= 4 && !sub2?.isCore) continue;
+                            if (sub2?.isCore && p1 >= 4 && !sub1?.isCore) continue;
+
+                            // Section 5: Avoid consecutive identical subjects on day d
+                            if (p1 > 0 && p1 - 1 !== p2 && this.state.grid[cId]?.[d]?.[p1 - 1]?.subjectId === cell2.subjectId) continue;
+                            if (p1 < MAX_PERIODS - 1 && p1 + 1 !== p2 && this.state.grid[cId]?.[d]?.[p1 + 1]?.subjectId === cell2.subjectId) continue;
+                            if (p2 > 0 && p2 - 1 !== p1 && this.state.grid[cId]?.[d]?.[p2 - 1]?.subjectId === cell1.subjectId) continue;
+                            if (p2 < MAX_PERIODS - 1 && p2 + 1 !== p1 && this.state.grid[cId]?.[d]?.[p2 + 1]?.subjectId === cell1.subjectId) continue;
+
+                            // Section 5: Teacher clash avoidance across all classes
+                            let teacherClash = false;
+                            const tids1 = cell1.teacherIds && cell1.teacherIds.length > 0 ? cell1.teacherIds : (cell1.teacherId ? [cell1.teacherId] : []);
+                            for (const tid of tids1) {
+                                if (tid === 'SYSTEM') continue;
+                                const tIdx = this.teacherToIndex.get(tid);
+                                if (tIdx !== undefined) {
+                                    const occupiedBy = this.state.teacherSchedule[tIdx][d][p2];
+                                    if (occupiedBy && occupiedBy !== cId) {
+                                        teacherClash = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (teacherClash) continue;
+
+                            const tids2 = cell2.teacherIds && cell2.teacherIds.length > 0 ? cell2.teacherIds : (cell2.teacherId ? [cell2.teacherId] : []);
+                            for (const tid of tids2) {
+                                if (tid === 'SYSTEM') continue;
+                                const tIdx = this.teacherToIndex.get(tid);
+                                if (tIdx !== undefined) {
+                                    const occupiedBy = this.state.teacherSchedule[tIdx][d][p1];
+                                    if (occupiedBy && occupiedBy !== cId) {
+                                        teacherClash = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (teacherClash) continue;
+
+                            // Perform tentative swap
+                            this.state.grid[cId][d][p1] = cell2;
+                            this.state.grid[cId][d][p2] = cell1;
+
+                            const newScore = calculateRepetitionScore(cId);
+                            if (newScore < currentScore) {
+                                // Keep improving swap! Update teacher schedules
+                                tids1.forEach(tid => {
+                                    const tIdx = this.teacherToIndex.get(tid);
+                                    if (tIdx !== undefined) {
+                                        this.state.teacherSchedule[tIdx][d][p1] = '';
+                                        this.state.teacherSchedule[tIdx][d][p2] = cId;
+                                    }
+                                });
+                                tids2.forEach(tid => {
+                                    const tIdx = this.teacherToIndex.get(tid);
+                                    if (tIdx !== undefined) {
+                                        this.state.teacherSchedule[tIdx][d][p2] = '';
+                                        this.state.teacherSchedule[tIdx][d][p1] = cId;
+                                    }
+                                });
+                                currentScore = newScore;
+                                improved = true;
+                            } else {
+                                // Revert swap
+                                this.state.grid[cId][d][p1] = cell1;
+                                this.state.grid[cId][d][p2] = cell2;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private rebuildStateFromGrid() {
+        this.state.teacherSchedule = Array.from({ length: this.teachers.length }, () => 
+            Array.from({ length: DAYS_COUNT }, () => new Array(MAX_PERIODS).fill(''))
+        );
+        this.state.classDailySubjects = Array.from({ length: this.classes.length }, () => 
+            Array.from({ length: DAYS_COUNT }, () => new Set<string>())
+        );
+        this.state.classDailyLoad = Array.from({ length: this.classes.length }, () => new Array(DAYS_COUNT).fill(0));
+        this.state.classDailyCoreCount = Array.from({ length: this.classes.length }, () => new Array(DAYS_COUNT).fill(0));
+
+        for (const classObj of this.classes) {
+            const cIdx = this.classToIndex.get(classObj.id);
+            if (cIdx === undefined) continue;
+
+            for (let d = 0; d < DAYS_COUNT; d++) {
+                for (let p = 0; p < MAX_PERIODS; p++) {
+                    const cell = this.state.grid[classObj.id]?.[d]?.[p];
+                    if (!cell || cell.subjectId === 'FREE' || cell.subjectId === 'WORSHIP') continue;
+
+                    this.state.classDailySubjects[cIdx][d].add(cell.subjectId);
+                    this.state.classDailyLoad[cIdx][d]++;
+                    const sub = this.subjects.find(s => s.id === cell.subjectId);
+                    if (sub?.isCore) {
+                        this.state.classDailyCoreCount[cIdx][d]++;
+                    }
+
+                    const tids = cell.teacherIds && cell.teacherIds.length > 0 
+                        ? cell.teacherIds 
+                        : (cell.teacherId ? [cell.teacherId] : []);
+                    tids.forEach(tid => {
+                        if (tid === 'SYSTEM') return;
+                        const tIdx = this.teacherToIndex.get(tid);
+                        if (tIdx !== undefined) {
+                            this.state.teacherSchedule[tIdx][d][p] = classObj.id;
+                        }
+                    });
+                }
+            }
+        }
     }
 
     private isCompleteGrid(): boolean {
@@ -370,7 +585,8 @@ export class ConstraintSolver {
         for (const cId in this.state.grid) {
             for (let d = 0; d < DAYS_COUNT; d++) {
                 for (let p = 0; p < MAX_PERIODS; p++) {
-                    if (this.state.grid[cId][d][p]) placed++;
+                    const cell = this.state.grid[cId][d][p];
+                    if (cell && cell.subjectId !== 'FREE' && cell.subjectId !== 'WORSHIP') placed++;
                 }
             }
         }
@@ -395,17 +611,13 @@ export class ConstraintSolver {
                 }
             }
 
-            // Check if task needs placement
-            const classLevel = classObj.level || (classObj.category === 'JSS' || classObj.category === 'JUNIOR' ? 'JUNIOR' : 'SENIOR');
-            const classSubjects = this.subjects.filter(s => {
-                const sLevel = s.level || (s.category === 'JSS' || s.category === 'JUNIOR' ? 'JUNIOR' : 'SENIOR');
-                return sLevel === classLevel || s.category === classObj.category || s.category === 'ALL';
-            });
+            // Check if task needs placement against total target count (Stage A + Stage B)
+            const classSubjects = getEligibleSubjectsForClass(classObj, this.subjects);
             const sub = classSubjects.find(s => s.id === task.subjectId);
             if (!sub) continue;
 
-            const totalRequiredForSub = sub.defaultPeriodCount || sub.periodsPerWeek || 3;
-            if (countPlaced >= totalRequiredForSub) continue;
+            const targetForSub = this.tasks.filter(t => t.classId === task.classId && t.subjectId === task.subjectId).length;
+            if (countPlaced >= targetForSub) continue;
 
             // Find valid slots with relaxed daily core/subject limits
             const slots = this.findValidSlots(task, classObj, cIdx, true);
@@ -413,14 +625,58 @@ export class ConstraintSolver {
                 this.sortSlots(slots, task, classObj, cIdx);
                 this.applyTask(task, slots[0].d, slots[0].p, cIdx);
             } else {
-                // Emergency placement into any open slot for this class
+                // Emergency placement into open instructional slot that respects maxPerDay, avoids consecutive periods, and avoids teacher clashes
+                const maxDaily = typeof sub.maxPerDay === 'number' ? sub.maxPerDay : (sub.defaultPeriodCount && sub.defaultPeriodCount >= 5 ? 2 : 1);
                 for (let d = 0; d < DAYS_COUNT; d++) {
-                    for (let p = 0; p < MAX_PERIODS; p++) {
-                        if (!this.state.grid[task.classId][d][p]) {
-                            this.applyTask(task, d, p, cIdx);
-                            break;
+                    let currentSubCountOnDay = 0;
+                    for (let cp = 0; cp < MAX_PERIODS; cp++) {
+                        if (this.state.grid[task.classId][d][cp]?.subjectId === task.subjectId) {
+                            currentSubCountOnDay++;
                         }
                     }
+                    if (currentSubCountOnDay >= maxDaily) continue;
+
+                    let placedEmergency = false;
+                    for (let p = 0; p < MAX_PERIODS; p++) {
+                        if (!this.state.grid[task.classId][d][p] && !this.isMandatedFreeSlot(classObj.category, d, p)) {
+                            // Core timing: Maths and English strictly in morning (P1..P4 = index 0..3)
+                            if (this.isStrictMorningCore(task.subjectId) && p >= 4) continue;
+
+                            // Avoid consecutive identical subject
+                            if (p > 0 && this.state.grid[task.classId][d][p - 1]?.subjectId === task.subjectId) continue;
+                            if (p < MAX_PERIODS - 1 && this.state.grid[task.classId][d][p + 1]?.subjectId === task.subjectId) continue;
+
+                            let selectedTeacherIds = task.teacherIds;
+                            let hasTeacherClash = false;
+                            for (const tid of task.teacherIds) {
+                                if (tid === 'SYSTEM') continue;
+                                const tIdx = this.teacherToIndex.get(tid);
+                                if (tIdx !== undefined && this.state.teacherSchedule[tIdx][d][p]) {
+                                    hasTeacherClash = true;
+                                    break;
+                                }
+                            }
+                            if (hasTeacherClash) {
+                                const altTeacher = this.teachers.find(t => 
+                                    t.subjectsTaught.includes(task.subjectId) && 
+                                    this.teacherToIndex.get(t.id) !== undefined && 
+                                    !this.state.teacherSchedule[this.teacherToIndex.get(t.id)!][d][p] &&
+                                    t.availability?.[d]?.[p] !== Availability.UNAVAILABLE
+                                );
+                                if (altTeacher) {
+                                    selectedTeacherIds = [altTeacher.id];
+                                    hasTeacherClash = false;
+                                }
+                            }
+                            if (!hasTeacherClash) {
+                                const placedTask = { ...task, teacherIds: selectedTeacherIds };
+                                this.applyTask(placedTask, d, p, cIdx);
+                                placedEmergency = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (placedEmergency) break;
                 }
             }
         }
@@ -436,7 +692,8 @@ export class ConstraintSolver {
                 const pct = Math.min(0.99, taskIndex / Math.max(1, this.tasks.length));
                 this.onProgress(pct, `Optimizing timetable... Placed ${taskIndex}/${this.tasks.length} tasks (${this.iterations} iterations)`);
             }
-            if (this.onSync) {
+            if (this.onSync && now - this.lastSyncTime >= 250) {
+                this.lastSyncTime = now;
                 const gridCopy = JSON.parse(JSON.stringify(this.state.grid));
                 this.onSync(gridCopy);
             }
@@ -451,7 +708,7 @@ export class ConstraintSolver {
         }
         if (now - this.startTime > this.timeLimit) {
             this.aborted = true;
-            this.bottlenecks.add('Time limit reached (60 seconds).');
+            this.bottlenecks.add(`Time limit reached (${Math.round(this.timeLimit / 1000)} seconds).`);
             return false;
         }
 
@@ -494,11 +751,7 @@ export class ConstraintSolver {
         const slots: { d: number, p: number }[] = [];
 
         // Calculate dynamic core limit per day based on class curriculum demand
-        const classLevel = classObj.level || (classObj.category === 'JSS' || classObj.category === 'JUNIOR' ? 'JUNIOR' : 'SENIOR');
-        const classSubjects = this.subjects.filter(s => {
-            const sLevel = s.level || (s.category === 'JSS' || s.category === 'JUNIOR' ? 'JUNIOR' : 'SENIOR');
-            return sLevel === classLevel || s.category === classObj.category || s.category === 'ALL';
-        });
+        const classSubjects = getEligibleSubjectsForClass(classObj, this.subjects);
 
         const totalCorePeriods = classSubjects.filter(s => s.isCore).reduce((acc, s) => acc + (s.defaultPeriodCount || s.periodsPerWeek || 3), 0);
         const dynamicHeavyLimit = Math.max(6, Math.ceil(totalCorePeriods / 5) + 1);
@@ -507,21 +760,25 @@ export class ConstraintSolver {
             : dynamicHeavyLimit;
 
         const sub = classSubjects.find(s => s.id === task.subjectId);
-        const maxDaily = sub?.maxPerDay || (sub && (sub.defaultPeriodCount || sub.periodsPerWeek || 3) > 5 ? 2 : 1);
+        const maxDaily = typeof sub?.maxPerDay === 'number' ? sub.maxPerDay : 2;
 
         for (let d = 0; d < DAYS_COUNT; d++) {
-            if (!relaxConstraints) {
-                // Hard Constraint 1: Subject max count per day
-                let currentSubCountOnDay = 0;
-                for (let p = 0; p < MAX_PERIODS; p++) {
-                    if (this.state.grid[classObj.id][d][p]?.subjectId === task.subjectId) {
-                        currentSubCountOnDay++;
-                    }
-                }
-                if (currentSubCountOnDay >= maxDaily) {
-                    continue;
-                }
+            if (task.fixedDay !== undefined && task.fixedDay !== d) {
+                continue;
+            }
 
+            // Count current occurrences of this subject on day d
+            let currentSubCountOnDay = 0;
+            for (let p = 0; p < MAX_PERIODS; p++) {
+                if (this.state.grid[classObj.id][d][p]?.subjectId === task.subjectId) {
+                    currentSubCountOnDay++;
+                }
+            }
+            if (currentSubCountOnDay >= maxDaily) {
+                continue;
+            }
+
+            if (!relaxConstraints) {
                 // Hard Constraint 2: Heavy core subject limit per day
                 if (task.isCore && this.state.classDailyCoreCount[cIdx][d] >= heavyLimit) {
                     continue;
@@ -530,7 +787,7 @@ export class ConstraintSolver {
 
             const maxP = task.duration === 2 ? MAX_PERIODS - 1 : MAX_PERIODS;
             for (let p = 0; p < maxP; p++) {
-                if (this.canPlace(task, classObj, d, p)) {
+                if (this.canPlace(task, classObj, d, p, relaxConstraints)) {
                     slots.push({ d, p });
                 }
             }
@@ -538,7 +795,7 @@ export class ConstraintSolver {
         return slots;
     }
 
-    private canPlace(task: Task, classObj: Class, d: number, p: number): boolean {
+    private canPlace(task: Task, classObj: Class, d: number, p: number, allowConsecutive = false): boolean {
         // 1. Mandated Free Slots (e.g. Friday afternoon closing)
         if (this.isMandatedFreeSlot(classObj.category, d, p)) return false;
         if (task.duration === 2 && this.isMandatedFreeSlot(classObj.category, d, p + 1)) return false;
@@ -547,7 +804,35 @@ export class ConstraintSolver {
         if (this.state.grid[classObj.id][d][p]) return false;
         if (task.duration === 2 && this.state.grid[classObj.id][d][p + 1]) return false;
 
-        // 3. Teacher Schedule & Explicit Availability Constraints
+        // 2b. Core Timing Rule (Section 2: Maths and English strictly in morning periods 0..3 = P1..P4)
+        if (this.isStrictMorningCore(task.subjectId)) {
+            if (p >= 4) return false;
+            if (task.duration === 2 && (p + 1) >= 4) return false;
+        } else if (p < 4 && !allowConsecutive) {
+            // Reserve exactly 2 morning slots on day d for Math and English
+            let otherMorningCount = 0;
+            for (let mp = 0; mp < 4; mp++) {
+                const cell = this.state.grid[classObj.id][d][mp];
+                if (cell && !this.isStrictMorningCore(cell.subjectId)) {
+                    otherMorningCount++;
+                }
+            }
+            if (otherMorningCount >= 2) {
+                return false;
+            }
+        }
+
+        // 3. Avoid consecutive periods of the same subject (single-period rule)
+        if (!allowConsecutive) {
+            if (p > 0 && this.state.grid[classObj.id][d][p - 1]?.subjectId === task.subjectId) {
+                return false;
+            }
+            if (p < MAX_PERIODS - 1 && this.state.grid[classObj.id][d][p + 1]?.subjectId === task.subjectId) {
+                return false;
+            }
+        }
+
+        // 4. Teacher Schedule & Explicit Availability Constraints
         const maxConsecutive = this.config.maxConsecutiveTeacherPeriods || 4;
 
         for (const tid of task.teacherIds) {
@@ -598,10 +883,11 @@ export class ConstraintSolver {
     private applyTask(task: Task, d: number, p: number, cIdx: number) {
         const cell: TimetableCell = {
             subjectId: task.subjectId,
-            teacherId: (task.teacherIds && task.teacherIds.length > 0) ? task.teacherIds[0] : 'SYSTEM',
-            teacherIds: task.teacherIds || ['SYSTEM'],
+            teacherId: (task.teacherIds && task.teacherIds.length > 0) ? task.teacherIds[0] : '',
+            teacherIds: task.teacherIds || [],
             isManual: false,
-            isDouble: task.duration === 2
+            isDouble: task.duration === 2,
+            classId: task.classId
         };
 
         this.state.grid[task.classId][d][p] = cell;
@@ -631,7 +917,15 @@ export class ConstraintSolver {
 
     private revertTask(task: Task, d: number, p: number, cIdx: number) {
         this.state.grid[task.classId][d][p] = null;
-        this.state.classDailySubjects[cIdx][d].delete(task.subjectId);
+        let remainingOnDay = 0;
+        for (let cp = 0; cp < MAX_PERIODS; cp++) {
+            if (this.state.grid[task.classId][d][cp]?.subjectId === task.subjectId) {
+                remainingOnDay++;
+            }
+        }
+        if (remainingOnDay === 0) {
+            this.state.classDailySubjects[cIdx][d].delete(task.subjectId);
+        }
         this.state.classDailyLoad[cIdx][d]--;
         if (task.isCore) this.state.classDailyCoreCount[cIdx][d]--;
 
@@ -668,14 +962,77 @@ export class ConstraintSolver {
             scoreA -= loadA * 15;
             scoreB -= loadB * 15;
 
-            // 2. Core Subjects Prefer Morning (Periods 0..3)
+            // 2. Core Subjects Timing Discipline (Section 2 & 5)
+            // Core subjects (Math, English, Science cores) must stay in morning periods (0..3 = P1..P4)
             if (task.isCore) {
-                const morningWeight = (goal === 'STUDENT_FRIENDLY') ? 40 : (goal === 'BALANCED' ? 25 : 15);
+                const morningWeight = (goal === 'STUDENT_FRIENDLY') ? 70 : (goal === 'BALANCED' ? 60 : 45);
                 if (a.p < 4) scoreA += morningWeight;
+                else scoreA -= 140;
+
                 if (b.p < 4) scoreB += morningWeight;
+                else scoreB -= 140;
+            } else {
+                // Non-core subjects prefer afternoon or late morning (balancing the day)
+                if (a.p >= 3) scoreA += 25;
+                if (b.p >= 3) scoreB += 25;
             }
 
-            // 3. Teacher Preference Matrix (PREFER vs AVOID)
+            // 3. Same Subject at the Same Period Across Weekdays Repetition Penalty (Section 4.A)
+            // Heavy quality penalty so Math, English, and other subjects move dynamically across the week
+            let samePeriodCountA = 0;
+            let samePeriodCountB = 0;
+            for (let od = 0; od < DAYS_COUNT; od++) {
+                if (od !== a.d && this.state.grid[classObj.id][od]?.[a.p]?.subjectId === task.subjectId) {
+                    samePeriodCountA++;
+                }
+                if (od !== b.d && this.state.grid[classObj.id][od]?.[b.p]?.subjectId === task.subjectId) {
+                    samePeriodCountB++;
+                }
+            }
+            if (samePeriodCountA > 0) scoreA -= samePeriodCountA * 95;
+            if (samePeriodCountB > 0) scoreB -= samePeriodCountB * 95;
+
+            // 4. Period Diversity Bonus (Section 2 & 3)
+            // Reward placing a subject at a period position it hasn't used yet in this class
+            let periodUsedA = false;
+            let periodUsedB = false;
+            for (let od = 0; od < DAYS_COUNT; od++) {
+                if (od !== a.d && this.state.grid[classObj.id][od]?.[a.p]?.subjectId === task.subjectId) {
+                    periodUsedA = true;
+                }
+                if (od !== b.d && this.state.grid[classObj.id][od]?.[b.p]?.subjectId === task.subjectId) {
+                    periodUsedB = true;
+                }
+            }
+            if (!periodUsedA) scoreA += 40;
+            if (!periodUsedB) scoreB += 40;
+
+            // 5. Identical 2-Subject Sequence Penalty (Section 4.B)
+            // Avoid placing the same pair of subjects (p-1, p) on different weekdays
+            if (a.p > 0) {
+                const prevA = this.state.grid[classObj.id][a.d]?.[a.p - 1]?.subjectId;
+                if (prevA && prevA !== 'FREE' && prevA !== 'WORSHIP') {
+                    for (let od = 0; od < DAYS_COUNT; od++) {
+                        if (od !== a.d && this.state.grid[classObj.id][od]?.[a.p - 1]?.subjectId === prevA &&
+                            this.state.grid[classObj.id][od]?.[a.p]?.subjectId === task.subjectId) {
+                            scoreA -= 50;
+                        }
+                    }
+                }
+            }
+            if (b.p > 0) {
+                const prevB = this.state.grid[classObj.id][b.d]?.[b.p - 1]?.subjectId;
+                if (prevB && prevB !== 'FREE' && prevB !== 'WORSHIP') {
+                    for (let od = 0; od < DAYS_COUNT; od++) {
+                        if (od !== b.d && this.state.grid[classObj.id][od]?.[b.p - 1]?.subjectId === prevB &&
+                            this.state.grid[classObj.id][od]?.[b.p]?.subjectId === task.subjectId) {
+                            scoreB -= 50;
+                        }
+                    }
+                }
+            }
+
+            // 6. Teacher Preference Matrix (PREFER vs AVOID)
             task.teacherIds.forEach(tid => {
                 const teacher = this.teachers.find(t => t.id === tid);
                 if (teacher && teacher.availability && teacher.availability[a.d]) {
@@ -690,25 +1047,52 @@ export class ConstraintSolver {
                 }
             });
 
-            // 4. Spread: Avoid placing same subject on adjacent days if possible
+            // 7. Spread: Distribute occurrences across different days whenever possible
+            // Heavily penalize placing the same subject twice on the same day when an empty weekday is available
+            if (this.state.classDailySubjects[cIdx][a.d]?.has(task.subjectId)) {
+                scoreA -= 110;
+            }
+            if (this.state.classDailySubjects[cIdx][b.d]?.has(task.subjectId)) {
+                scoreB -= 110;
+            }
+
+            // Also encourage spacing across the week (avoid adjacent days for low frequency subjects)
             if (this.state.classDailySubjects[cIdx][a.d - 1]?.has(task.subjectId) || 
                 this.state.classDailySubjects[cIdx][a.d + 1]?.has(task.subjectId)) {
-                scoreA -= 10;
+                scoreA -= 25;
             }
             if (this.state.classDailySubjects[cIdx][b.d - 1]?.has(task.subjectId) || 
                 this.state.classDailySubjects[cIdx][b.d + 1]?.has(task.subjectId)) {
-                scoreB -= 10;
+                scoreB -= 25;
             }
 
-            // 5. Friday Lightness Rule
+            // 8. Quality: Avoid consecutive identical subjects
+            if (a.p > 0 && this.state.grid[classObj.id][a.d][a.p - 1]?.subjectId === task.subjectId) {
+                scoreA -= 100;
+            }
+            if (a.p < MAX_PERIODS - 1 && this.state.grid[classObj.id][a.d][a.p + 1]?.subjectId === task.subjectId) {
+                scoreA -= 100;
+            }
+            if (b.p > 0 && this.state.grid[classObj.id][b.d][b.p - 1]?.subjectId === task.subjectId) {
+                scoreB -= 100;
+            }
+            if (b.p < MAX_PERIODS - 1 && this.state.grid[classObj.id][b.d][b.p + 1]?.subjectId === task.subjectId) {
+                scoreB -= 100;
+            }
+
+            // 9. Compactness: Avoid unnecessary isolated gaps between lessons
+            if (a.p === 0 || this.state.grid[classObj.id][a.d][a.p - 1]) scoreA += 10;
+            if (b.p === 0 || this.state.grid[classObj.id][b.d][b.p - 1]) scoreB += 10;
+
+            // 10. Friday Lightness Rule
             if (this.config.style?.fridayRelaxation) {
                 if (a.d === 4 && a.p >= 4) scoreA -= 20;
                 if (b.d === 4 && b.p >= 4) scoreB -= 20;
             }
 
-            // 6. Slight Randomness for Path Exploration
-            scoreA += Math.random() * 4;
-            scoreB += Math.random() * 4;
+            // 11. Controlled Randomness for Exploration (helps break symmetry)
+            scoreA += Math.random() * 8;
+            scoreB += Math.random() * 8;
 
             return scoreB - scoreA;
         });
@@ -725,7 +1109,7 @@ export class ConstraintSolver {
             for (let d = 0; d < DAYS_COUNT; d++) {
                 for (let p = 0; p < MAX_PERIODS; p++) {
                     const cell = this.state.grid[cId][d][p];
-                    if (cell) {
+                    if (cell && cell.subjectId !== 'FREE' && cell.subjectId !== 'WORSHIP') {
                         totalPlaced++;
                         const sub = this.subjects.find(s => s.id === cell.subjectId);
                         if (sub?.isCore) {
@@ -748,20 +1132,125 @@ export class ConstraintSolver {
             }
         }
 
-        const completionRate = Math.round((totalPlaced / Math.max(1, this.totalRequiredSlots)) * 100);
+        let totalConfiguredRequired = 0;
+        let totalMissingLessons = 0;
+        let totalExcessLessons = 0;
+        let totalUnassignedSlots = 0;
+        let dailyLimitViolations = 0;
+        const eligibleTeachingSlots = (DAYS_COUNT * MAX_PERIODS) - 2; // 38 slots (excluding Friday Worship P7 & P8)
+        const classBreakdown: Record<string, ClassAllocationSummary> = {};
+
+        for (const classObj of this.classes) {
+            const classSubjects = getEligibleSubjectsForClass(classObj, this.subjects);
+            const scheduledCounts = new Map<string, number>();
+            const dailyCounts: Record<number, Record<string, number>> = {};
+            let classScheduled = 0;
+
+            for (let d = 0; d < DAYS_COUNT; d++) {
+                dailyCounts[d] = {};
+                for (let p = 0; p < MAX_PERIODS; p++) {
+                    const cell = this.state.grid[classObj.id]?.[d]?.[p];
+                    if (cell && cell.subjectId !== 'FREE' && cell.subjectId !== 'WORSHIP') {
+                        classScheduled++;
+                        scheduledCounts.set(cell.subjectId, (scheduledCounts.get(cell.subjectId) || 0) + 1);
+                        dailyCounts[d][cell.subjectId] = (dailyCounts[d][cell.subjectId] || 0) + 1;
+                    }
+                }
+            }
+
+            let classRequired = 0;
+            let classMissing = 0;
+            let classExcess = 0;
+
+            for (const sub of classSubjects) {
+                const req = sub.defaultPeriodCount || sub.periodsPerWeek || 3;
+                classRequired += req;
+                const scheduled = scheduledCounts.get(sub.id) || 0;
+                if (scheduled < req) {
+                    classMissing += (req - scheduled);
+                    this.bottlenecks.add(`Missing Required Lesson: Class ${classObj.name} scheduled ${scheduled}/${req} periods for ${sub.name}.`);
+                } else if (scheduled > req) {
+                    classExcess += (scheduled - req);
+                    this.bottlenecks.add(`Excess Lesson: Class ${classObj.name} scheduled ${scheduled}/${req} periods for ${sub.name}.`);
+                }
+            }
+
+            // Daily limits check
+            for (let d = 0; d < DAYS_COUNT; d++) {
+                for (const subId in dailyCounts[d]) {
+                    const sub = classSubjects.find(s => s.id === subId);
+                    const maxDaily = typeof sub?.maxPerDay === 'number' ? sub.maxPerDay : (sub && (sub.defaultPeriodCount || sub.periodsPerWeek || 3) >= 5 ? 2 : 1);
+                    if (dailyCounts[d][subId] > maxDaily) {
+                        dailyLimitViolations++;
+                    }
+                }
+            }
+
+            const unassigned = Math.max(0, eligibleTeachingSlots - classScheduled);
+            totalConfiguredRequired += classRequired;
+            totalMissingLessons += classMissing;
+            totalExcessLessons += classExcess;
+            totalUnassignedSlots += unassigned;
+
+            classBreakdown[classObj.id] = {
+                eligibleSlots: eligibleTeachingSlots,
+                requiredLessons: classRequired,
+                additionalLessons: classExcess,
+                totalScheduled: classScheduled,
+                unfilledSlots: unassigned
+            };
+        }
+
+        // Teacher clash detection across classes
+        let teacherClashes = 0;
+        const teacherUsage: Record<string, string[]> = {};
+        for (const classObj of this.classes) {
+            for (let d = 0; d < DAYS_COUNT; d++) {
+                for (let p = 0; p < MAX_PERIODS; p++) {
+                    const cell = this.state.grid[classObj.id]?.[d]?.[p];
+                    if (!cell || cell.subjectId === 'FREE' || cell.subjectId === 'WORSHIP') continue;
+                    const tids = cell.teacherIds || (cell.teacherId ? [cell.teacherId] : []);
+                    tids.forEach(tid => {
+                        if (tid === 'SYSTEM') return;
+                        const key = `${tid}-${d}-${p}`;
+                        if (!teacherUsage[key]) teacherUsage[key] = [];
+                        teacherUsage[key].push(classObj.name);
+                    });
+                }
+            }
+        }
+        for (const [key, classesUsing] of Object.entries(teacherUsage)) {
+            if (classesUsing.length > 1) {
+                teacherClashes++;
+                const [tid, d, p] = key.split('-');
+                const tObj = this.teachers.find(t => t.id === tid);
+                this.bottlenecks.add(`Teacher Clash: ${tObj?.name || tid} scheduled simultaneously with classes (${classesUsing.join(', ')}) on ${DAYS[parseInt(d)]} P${parseInt(p) + 1}.`);
+            }
+        }
+
+        const completionRate = totalConfiguredRequired > 0 
+            ? Math.round((Math.max(0, totalConfiguredRequired - totalMissingLessons) / totalConfiguredRequired) * 100) 
+            : 100;
         const morningCoreRatio = totalCoreCount > 0 ? Math.round((morningCoreCount / totalCoreCount) * 100) : 100;
         const teacherPrefRate = totalPrefEvaluated > 0 ? Math.round((prefMatches / totalPrefEvaluated) * 100) : 100;
-        const score = Math.round((completionRate * 0.5) + (morningCoreRatio * 0.25) + (teacherPrefRate * 0.25));
+        const hardConstraintsSatisfied = (totalMissingLessons === 0) && (totalExcessLessons === 0) && (teacherClashes === 0) && (dailyLimitViolations === 0);
+        
+        const score = hardConstraintsSatisfied 
+            ? Math.round((completionRate * 0.5) + (morningCoreRatio * 0.25) + (teacherPrefRate * 0.25))
+            : Math.max(0, Math.round((completionRate * 0.5) + (morningCoreRatio * 0.25) + (teacherPrefRate * 0.25)) - (totalMissingLessons * 5 + totalExcessLessons * 10 + teacherClashes * 15));
 
         const recommendations: string[] = [];
-        if (completionRate < 100) {
-            recommendations.push("Consider increasing teacher capacity or converting some double periods into single periods.");
+        if (totalMissingLessons > 0) {
+            recommendations.push(`${totalMissingLessons} required curriculum lessons could not be scheduled due to teacher capacity or availability constraints.`);
+        }
+        if (totalExcessLessons > 0) {
+            recommendations.push(`${totalExcessLessons} excess lessons detected above configured curriculum frequencies.`);
         }
         if (morningCoreRatio < 70) {
             recommendations.push("Core subjects are spilling into afternoon periods. Try reducing manual locks in early morning periods.");
         }
         if (teacherPrefRate < 80) {
-            recommendations.push("Some teachers were scheduled during 'Avoid' slots due to tight class demands.");
+            recommendations.push("Some teachers were scheduled during 'Avoid' slots due to class timetable demands.");
         }
 
         return {
@@ -769,15 +1258,18 @@ export class ConstraintSolver {
             goal: this.config.goal,
             iterations: this.iterations,
             executionTimeMs: Date.now() - (this.startTime || Date.now()),
-            hardConstraintsSatisfied: completionRate === 100,
+            hardConstraintsSatisfied,
             totalSlotsScheduled: totalPlaced,
-            totalSlotsRequired: this.totalRequiredSlots,
+            totalSlotsRequired: totalConfiguredRequired,
+            totalCurriculumRequired: totalConfiguredRequired,
+            totalAdditionalAllocated: totalExcessLessons,
+            classBreakdown,
             completionRate,
             teacherPreferenceSatisfactionRate: teacherPrefRate,
             morningCoreRatio,
             bottlenecks: Array.from(this.bottlenecks),
-            recommendations: recommendations.length > 0 ? recommendations : ["Timetable constraints are optimally balanced."],
-            summary: `Scheduled ${totalPlaced}/${this.totalRequiredSlots} required class slots across ${this.classes.length} classes. ${morningCoreRatio}% of core subjects scheduled in prime morning hours.`
+            recommendations: recommendations.length > 0 ? recommendations : ["Curriculum frequencies exactly satisfied with optimal constraint balance."],
+            summary: `Required lessons: ${totalConfiguredRequired} | Scheduled required lessons: ${totalPlaced - totalExcessLessons} | Missing required lessons: ${totalMissingLessons} | Excess lessons: ${totalExcessLessons} | Remaining unassigned slots: ${totalUnassignedSlots} | Teacher conflicts: ${teacherClashes} | Class conflicts: 0`
         };
     }
 }
