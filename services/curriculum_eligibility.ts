@@ -1,15 +1,37 @@
-import { Class, Subject, AcademicLevel } from '../types';
+import { Class, Subject, AcademicLevel, Teacher } from '../types';
 
 /**
  * Normalizes subject stream identifier
  */
 export function getSubjectStream(subject: Subject): 'SCIENCE' | 'BC' | 'ALL' {
+  const code = (subject.code || subject.id || subject.name || '').toUpperCase();
+  const name = (subject.name || '').toUpperCase();
+
+  // Commercial / BC subjects are ALWAYS BC stream in Senior secondary
+  if (code.includes('ECON') || name.includes('ECONOMICS') ||
+      code.includes('YORU') || name.includes('YORUBA') ||
+      code.includes('ACCO') || name.includes('ACCOUNTING') ||
+      code.includes('COMM') || name.includes('COMMERCE') ||
+      code.includes('GOVE') || name.includes('GOVERNMENT') ||
+      code.includes('LITE') || name.includes('LITERATURE') ||
+      code.includes('STOR') || name.includes('STORE MANAGEMENT') ||
+      code.includes('BOOK') || name.includes('BOOK KEEPING')) {
+    return 'BC';
+  }
+
+  // Pure Science subjects are ALWAYS SCIENCE stream
+  if (code.includes('PHYS') || name.includes('PHYSICS') ||
+      code.includes('CHEM') || name.includes('CHEMISTRY') ||
+      code.includes('BIOL') || name.includes('BIOLOGY') ||
+      code.includes('FURT') || name.includes('FURTHER MATH') ||
+      code.includes('TECH') || name.includes('TECHNICAL DRAWING')) {
+    return 'SCIENCE';
+  }
+
   if (subject.stream) return subject.stream;
 
   const category = (subject.category || '').toUpperCase();
   if (category === 'SSS_SCIENCE') {
-    // Check if it's one of the common subjects
-    const code = (subject.code || subject.name || '').toUpperCase();
     if (code.includes('MATH') || code.includes('ENGL') || code.includes('CIVI')) {
       return 'ALL';
     }
@@ -22,10 +44,6 @@ export function getSubjectStream(subject: Subject): 'SCIENCE' | 'BC' | 'ALL' {
     }
     return 'BC';
   }
-
-  // Check code/name patterns for SS subjects
-  const code = (subject.code || subject.id || subject.name || '').toUpperCase();
-  const name = (subject.name || '').toUpperCase();
 
   // Common SS subjects
   if (code.startsWith('MATH') || code.startsWith('MTH') || name.includes('MATHEMATICS') ||
@@ -133,6 +151,40 @@ export function isSubjectEligibleForClass(
   // 5. Senior Classes: Stream Eligibility Check
   const classStream = getClassStream(classObj); // 'SCIENCE' | 'BC' | 'GENERAL'
 
+  const subCodeUpper = (subject.code || subject.id || subject.name || '').toUpperCase();
+  const subNameUpper = (subject.name || '').toUpperCase();
+
+  // STRICT RULE: Commercial / BC subjects MUST NEVER be taught in Science ("A") classes!
+  // Economics, Yoruba, Accounting, Commerce, Literature in English, Government, Store Management, Book Keeping are strictly for BC classes.
+  if (classStream === 'SCIENCE') {
+    if (
+      subCodeUpper.includes('ECON') || subNameUpper.includes('ECONOMICS') ||
+      subCodeUpper.includes('YORU') || subNameUpper.includes('YORUBA') ||
+      subCodeUpper.includes('ACCO') || subNameUpper.includes('ACCOUNTING') ||
+      subCodeUpper.includes('COMM') || subNameUpper.includes('COMMERCE') ||
+      subCodeUpper.includes('GOVE') || subNameUpper.includes('GOVERNMENT') ||
+      subCodeUpper.includes('LITE') || subNameUpper.includes('LITERATURE') ||
+      subCodeUpper.includes('STOR') || subNameUpper.includes('STORE MANAGEMENT') ||
+      subCodeUpper.includes('BOOK') || subNameUpper.includes('BOOK KEEPING')
+    ) {
+      return false;
+    }
+  }
+
+  // Vice versa: Pure Science subjects MUST NEVER be taught in BC classes!
+  // Physics, Chemistry, Biology, Technical Drawing, Further Maths are strictly for Science ("A") classes.
+  if (classStream === 'BC') {
+    if (
+      subCodeUpper.includes('PHYS') || subNameUpper.includes('PHYSICS') ||
+      subCodeUpper.includes('CHEM') || subNameUpper.includes('CHEMISTRY') ||
+      subCodeUpper.includes('BIOL') || subNameUpper.includes('BIOLOGY') ||
+      subCodeUpper.includes('FURT') || subNameUpper.includes('FURTHER MATH') ||
+      subCodeUpper.includes('TECH') || subNameUpper.includes('TECHNICAL DRAWING')
+    ) {
+      return false;
+    }
+  }
+
   // ID-based stream affiliation check
   if (subject.id.endsWith('_sci')) {
     return classStream === 'SCIENCE';
@@ -181,3 +233,44 @@ export function getEligibleSubjectsForClass(
 ): Subject[] {
   return allSubjects.filter(sub => isSubjectEligibleForClass(sub, classObj, isOtaSchool));
 }
+
+/**
+ * Single source of truth for maximum daily occurrences of a subject.
+ * Explicitly configured maxPerDay takes precedence.
+ * If unspecified, subjects requiring 5+ periods/week default to 2/day; others default to 1/day.
+ */
+export function resolveMaxPerDay(sub: Subject): number {
+  if (typeof sub.maxPerDay === 'number' && sub.maxPerDay > 0) {
+    return sub.maxPerDay;
+  }
+  const weekly = sub.defaultPeriodCount || sub.periodsPerWeek || 3;
+  return weekly >= 5 ? 2 : 1;
+}
+
+/**
+ * Safe, robust qualification check matching canonical IDs and normalized legacy codes/names
+ * without creating spurious cross-subject false positives.
+ */
+export function isTeacherQualifiedForSubject(teacher: Teacher, sub: Subject): boolean {
+  if (!teacher || !teacher.subjectsTaught || !Array.isArray(teacher.subjectsTaught)) {
+    return false;
+  }
+  // 1. Direct canonical subject ID match
+  if (teacher.subjectsTaught.includes(sub.id)) {
+    return true;
+  }
+  // 2. Case-insensitive / code / name normalized match for legacy or imported records
+  const subCode = (sub.code || '').toUpperCase().trim();
+  const subName = (sub.name || '').toUpperCase().trim();
+  const subIdUpper = sub.id.toUpperCase().trim();
+
+  return teacher.subjectsTaught.some(st => {
+    if (!st || typeof st !== 'string') return false;
+    const cleanSt = st.toUpperCase().trim();
+    if (cleanSt === subIdUpper) return true;
+    if (subCode && cleanSt === subCode) return true;
+    if (subName && cleanSt === subName) return true;
+    return false;
+  });
+}
+

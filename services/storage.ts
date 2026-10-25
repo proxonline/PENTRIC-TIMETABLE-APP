@@ -95,6 +95,11 @@ class CloudSync {
     private serverSyncVersion = 0;
     private syncInterval: any = null;
     private lastFirestoreTimestamps: Record<string, number> = {};
+    public lastLocalTimetableMutation = 0;
+
+    private getDeletedTeacherIds(): string[] {
+        return safeParseArray<string>(localStorage.getItem('ota_deleted_teachers_v1'), []);
+    }
 
     constructor() {
         if (typeof BroadcastChannel !== 'undefined') {
@@ -154,6 +159,11 @@ class CloudSync {
                 if (payload === undefined) return;
 
                 if (k === KEYS.TIMETABLE) {
+                    // Prevent fast polling loop from reverting a fresh local timetable mutation during in-flight network roundtrip
+                    if (Date.now() - this.lastLocalTimetableMutation < 4000) {
+                        return;
+                    }
+
                     const currentLocalStr = localStorage.getItem(k);
                     let currentClassesCount = 0;
                     try {
@@ -190,12 +200,35 @@ class CloudSync {
                         items = safeParseArray(JSON.stringify(payload), []);
                     }
                     if (k === KEYS.TEACHERS) {
+                        // Strict tombstone filtering: deleted teachers must NEVER be revived by incoming sync payloads
+                        const deletedIds = this.getDeletedTeacherIds();
+                        items = items.filter((it: any) => it && it.id && !deletedIds.includes(it.id));
+
                         const localTeachers: Teacher[] = safeParseArray(localStorage.getItem(KEYS.TEACHERS), []);
-                        // Preserve and synchronize profile pictures across sync updates
+                        // Safety reconciliation: an uninitialized or empty remote payload must not wipe
+                        // out populated valid local teachers unless all local teachers were deliberately deleted.
+                        if (items.length === 0 && localTeachers.length > 0) {
+                            const nonDeletedLocal = localTeachers.filter(lt => lt && lt.id && !deletedIds.includes(lt.id));
+                            if (nonDeletedLocal.length > 0) {
+                                items = nonDeletedLocal;
+                            }
+                        }
+
+                        // Preserve and synchronize profile pictures and onboarding status across sync updates
                         items.forEach((it: any) => {
                             if (it && it.id) {
-                                const savedPic = localStorage.getItem(`ota_profile_pic_${it.id}`);
                                 const localT = localTeachers.find(lt => lt && lt.id === it.id);
+                                const isLocallyCompleted = localT?.isCompleted || localStorage.getItem(`ota_teacher_completed_${it.id}`) === 'true';
+                                if (isLocallyCompleted) {
+                                    it.isCompleted = true;
+                                    if ((!it.assignedClasses || it.assignedClasses.length === 0) && localT?.assignedClasses?.length) {
+                                        it.assignedClasses = localT.assignedClasses;
+                                    }
+                                    if ((!it.subjectsTaught || it.subjectsTaught.length === 0) && localT?.subjectsTaught?.length) {
+                                        it.subjectsTaught = localT.subjectsTaught;
+                                    }
+                                }
+                                const savedPic = localStorage.getItem(`ota_profile_pic_${it.id}`);
                                 if (!it.profilePicture && (savedPic || localT?.profilePicture)) {
                                     it.profilePicture = savedPic || localT?.profilePicture;
                                 } else if (it.profilePicture) {
@@ -347,6 +380,9 @@ class CloudSync {
                                     let payload = data.payload;
                                     if (key === KEYS.TIMETABLE || key === KEYS.SETTINGS || key === KEYS.THEME) {
                                         if (key === KEYS.TIMETABLE) {
+                                            if (Date.now() - this.lastLocalTimetableMutation < 4000) {
+                                                return;
+                                            }
                                             const currentLocalStr = localStorage.getItem(key);
                                             let currentClassesCount = 0;
                                             try {
@@ -379,20 +415,36 @@ class CloudSync {
                                     } else {
                                         const items: any[] = safeParseArray(typeof payload === 'string' ? payload : JSON.stringify(payload), []);
                                         if (key === KEYS.TEACHERS) {
+                                            // Do NOT resurrect deleted teachers
+                                            const deletedIds = this.getDeletedTeacherIds();
+                                            const activeItems = items.filter((it: any) => it && it.id && !deletedIds.includes(it.id));
+                                            items.length = 0;
+                                            items.push(...activeItems);
+
                                             const localTeachers: Teacher[] = safeParseArray(localStorage.getItem(KEYS.TEACHERS), []);
-                                            localTeachers.forEach(lt => {
-                                                if (lt && (lt.isApproved === false || lt.approvalStatus === 'PENDING')) {
-                                                    const exists = items.some((it: any) => it && (it.id === lt.id || it.username === lt.username));
-                                                    if (!exists) {
-                                                        items.push(lt);
-                                                    }
+                                            // Safety reconciliation: an uninitialized or empty remote payload must not wipe
+                                            // out populated valid local teachers unless all local teachers were deliberately deleted.
+                                            if (items.length === 0 && localTeachers.length > 0) {
+                                                const nonDeletedLocal = localTeachers.filter(lt => lt && lt.id && !deletedIds.includes(lt.id));
+                                                if (nonDeletedLocal.length > 0) {
+                                                    items.push(...nonDeletedLocal);
                                                 }
-                                            });
-                                            // Preserve and synchronize profile pictures across sync updates
+                                            }
+                                            // Preserve and synchronize profile pictures and onboarding status across sync updates
                                             items.forEach((it: any) => {
                                                 if (it && it.id) {
-                                                    const savedPic = localStorage.getItem(`ota_profile_pic_${it.id}`);
                                                     const localT = localTeachers.find(lt => lt && lt.id === it.id);
+                                                    const isLocallyCompleted = localT?.isCompleted || localStorage.getItem(`ota_teacher_completed_${it.id}`) === 'true';
+                                                    if (isLocallyCompleted) {
+                                                        it.isCompleted = true;
+                                                        if ((!it.assignedClasses || it.assignedClasses.length === 0) && localT?.assignedClasses?.length) {
+                                                            it.assignedClasses = localT.assignedClasses;
+                                                        }
+                                                        if ((!it.subjectsTaught || it.subjectsTaught.length === 0) && localT?.subjectsTaught?.length) {
+                                                            it.subjectsTaught = localT.subjectsTaught;
+                                                        }
+                                                    }
+                                                    const savedPic = localStorage.getItem(`ota_profile_pic_${it.id}`);
                                                     if (!it.profilePicture && (savedPic || localT?.profilePicture)) {
                                                         it.profilePicture = savedPic || localT?.profilePicture;
                                                     } else if (it.profilePicture) {
@@ -725,9 +777,25 @@ export const storage = {
 
       if (rawSubjects.length > 0) {
           // Normalize and preserve exact user customized period counts
-          const normalized = rawSubjects
+          let normalized = rawSubjects
               .filter(s => s && (s.id || s.name))
+              .filter(s => s.id !== 'eco_sci' && s.id !== 'yor_sci')
               .map(s => storage.normalizeSubject(s));
+
+          // Auto-upgrade legacy 33-period Science subjects to balanced 38-period curriculum
+          const sciSubs = normalized.filter(s => s.level === 'SENIOR' && (s.stream === 'SCIENCE' || s.id?.endsWith('_sci') || ['phy_sci', 'chem_sci', 'bio_sci'].includes(s.id)));
+          const sciTotal = sciSubs.reduce((sum, s) => sum + (s.defaultPeriodCount || s.periodsPerWeek || 0), 0);
+          if (sciTotal === 33) {
+            normalized = normalized.map(s => {
+              if (s.id === 'phy_sci') return { ...s, defaultPeriodCount: 5, periodsPerWeek: 5 };
+              if (s.id === 'chem_sci') return { ...s, defaultPeriodCount: 5, periodsPerWeek: 5 };
+              if (s.id === 'bio_sci') return { ...s, defaultPeriodCount: 5, periodsPerWeek: 5 };
+              if (s.id === 'td_sci') return { ...s, defaultPeriodCount: 4, periodsPerWeek: 4 };
+              if (s.id === 'dgt_sci') return { ...s, defaultPeriodCount: 3, periodsPerWeek: 3 };
+              return s;
+            });
+            localStorage.setItem(KEYS.SUBJECTS, JSON.stringify(normalized));
+          }
 
           // If current school is OTA Total Academy, filter out any outdated Geography entries
           if (isOta) {
@@ -784,11 +852,94 @@ export const storage = {
       };
   },
 
+  getDeletedTeacherIds: (): string[] => {
+    return safeParseArray<string>(localStorage.getItem('ota_deleted_teachers_v1'), []);
+  },
+
+  scrubTeacherFromLocalTimetable: (teacherId: string) => {
+    const data = localStorage.getItem(KEYS.TIMETABLE);
+    if (!data) return;
+    try {
+      const timetable = JSON.parse(data);
+      if (timetable && typeof timetable === 'object') {
+        let changed = false;
+        for (const classId in timetable) {
+          const days = timetable[classId];
+          if (!days || typeof days !== 'object') continue;
+          for (const day in days) {
+            const periods = days[day];
+            if (!periods || typeof periods !== 'object') continue;
+            for (const period in periods) {
+              const cell = periods[period];
+              if (cell) {
+                if (cell.teacherId === teacherId) {
+                  cell.teacherId = '';
+                  cell.teacherName = 'Unassigned';
+                  changed = true;
+                }
+                if (Array.isArray(cell.teacherIds) && cell.teacherIds.includes(teacherId)) {
+                  cell.teacherIds = cell.teacherIds.filter((tid: string) => tid !== teacherId);
+                  changed = true;
+                }
+              }
+            }
+          }
+        }
+        if (changed) {
+          localStorage.setItem(KEYS.TIMETABLE, JSON.stringify(timetable));
+        }
+      }
+    } catch {}
+  },
+
+  sanitizeTimetableGrid: (grid: TimetableGrid): TimetableGrid => {
+    if (!grid || typeof grid !== 'object') return grid;
+    const bcSubjectKeywords = ['ECONOMICS', 'YORUBA', 'COMMERCE', 'ACCOUNTING', 'BOOK KEEPING', 'STORE MANAGEMENT', 'LITERATURE', 'GOVERNMENT'];
+    const sanitized = JSON.parse(JSON.stringify(grid));
+
+    for (const classId in sanitized) {
+      const isScienceClass = /SS\d+A\d*/i.test(classId);
+      if (!isScienceClass) continue;
+
+      const days = sanitized[classId];
+      if (!days || typeof days !== 'object') continue;
+      for (const day in days) {
+        const periods = days[day];
+        if (!periods || typeof periods !== 'object') continue;
+        for (const period in periods) {
+          const cell = periods[period];
+          if (!cell) continue;
+
+          const sId = (cell.subjectId || '').toLowerCase();
+          const sName = (cell.subjectName || '').toUpperCase();
+          const isBcSubject = sId === 'eco_sci' || sId === 'yor_sci' || sId.endsWith('_bc') ||
+            bcSubjectKeywords.some(kw => sName.includes(kw));
+
+          if (isBcSubject) {
+            periods[period] = {
+              subjectId: '',
+              subjectName: 'Free',
+              teacherId: '',
+              teacherName: 'Unassigned',
+              isCore: false,
+              room: ''
+            };
+          }
+        }
+      }
+    }
+    return sanitized;
+  },
+
   // --- TEACHERS ---
   getTeachers: (): Teacher[] => {
+    const deletedIds = storage.getDeletedTeacherIds();
     const data = localStorage.getItem(KEYS.TEACHERS);
     let teachers: Teacher[] = safeParseArray<Teacher>(data, []);
     if (!teachers) teachers = [];
+
+    // Filter out deleted/tombstoned teachers
+    teachers = teachers.filter(t => t && t.id && !deletedIds.includes(t.id));
 
     let modified = false;
     teachers.forEach(t => {
@@ -808,6 +959,9 @@ export const storage = {
       if (t && !t.calendarToken) {
         t.calendarToken = 'cal_' + Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
         modified = true;
+      }
+      if (t && localStorage.getItem(`ota_teacher_completed_${t.id}`) === 'true') {
+        t.isCompleted = true;
       }
       if (t && t.isApproved === undefined && t.approvalStatus === undefined) {
         t.isApproved = true;
@@ -839,6 +993,11 @@ export const storage = {
         localStorage.setItem(`ota_profile_pic_${teacher.id}`, teacher.profilePicture);
       } catch {}
     }
+    if (teacher && teacher.id && teacher.isCompleted) {
+      try {
+        localStorage.setItem(`ota_teacher_completed_${teacher.id}`, 'true');
+      } catch {}
+    }
     const data = localStorage.getItem(KEYS.TEACHERS);
     let teachers: Teacher[] = safeParseArray<Teacher>(data, []);
     const formatted = {
@@ -855,16 +1014,21 @@ export const storage = {
     }
     cloud.pushItem(KEYS.TEACHERS, formatted.id, formatted);
 
-    // Direct profile API persistence to server and real-time broadcast
+    // Direct profile & onboarding API persistence to server and real-time broadcast
     if (formatted.id && typeof window !== 'undefined') {
       fetch(`/api/teachers/${formatted.id}/profile`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          name: formatted.name,
           profilePicture: formatted.profilePicture,
           bio: formatted.bio,
           contactEmail: formatted.contactEmail,
-          contactPhone: formatted.contactPhone
+          contactPhone: formatted.contactPhone,
+          isCompleted: formatted.isCompleted,
+          assignedClasses: formatted.assignedClasses,
+          subjectsTaught: formatted.subjectsTaught,
+          availability: formatted.availability
         })
       }).catch(() => {});
     }
@@ -893,9 +1057,20 @@ export const storage = {
   },
 
   deleteTeacher: (id: string) => {
+    const tombstones = storage.getDeletedTeacherIds();
+    if (!tombstones.includes(id)) {
+      tombstones.push(id);
+      try {
+        localStorage.setItem('ota_deleted_teachers_v1', JSON.stringify(tombstones));
+      } catch {}
+    }
     const teachers = storage.getTeachers();
     const updated = teachers.filter(t => t.id !== id);
     localStorage.setItem(KEYS.TEACHERS, JSON.stringify(updated));
+    storage.scrubTeacherFromLocalTimetable(id);
+    if (typeof window !== 'undefined') {
+      fetch(`/api/teachers/${id}`, { method: 'DELETE' }).catch(() => {});
+    }
     cloud.deleteItem(KEYS.TEACHERS, id);
   },
 
@@ -955,6 +1130,49 @@ export const storage = {
       else admins.push(formatted);
       localStorage.setItem(KEYS.ADMINS, JSON.stringify(admins));
       cloud.pushItem(KEYS.ADMINS, formatted.id, formatted);
+  },
+
+  changeAdminPassword: async (adminId: string, newPass: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const admins = storage.getAdmins();
+      const idx = admins.findIndex(a => a.id === adminId);
+      if (idx === -1) {
+        return { success: false, error: 'Administrator account not found.' };
+      }
+      if (!newPass || newPass.trim().length < 8) {
+        return { success: false, error: 'Security requirement: New password must be at least 8 characters long.' };
+      }
+      if (newPass.trim() === 'admin123' || newPass.trim() === 'admin') {
+        return { success: false, error: 'Security violation: You cannot reuse the default password.' };
+      }
+
+      const hashedPassword = bcrypt.hashSync(newPass.trim(), 10);
+      admins[idx].password = hashedPassword;
+      admins[idx].mustChangePassword = false;
+      localStorage.setItem(KEYS.ADMINS, JSON.stringify(admins));
+      cloud.pushItem(KEYS.ADMINS, adminId, admins[idx]);
+
+      // Server persistence sync
+      try {
+        await fetch('/api/auth/change-admin-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ adminId, newPassword: newPass.trim() })
+        });
+      } catch (netErr) {}
+
+      storage.addAuditLog({
+        actorName: admins[idx].name || 'Administrator',
+        actorRole: 'ADMIN',
+        action: 'ADMIN_PASSWORD_HARDENED',
+        details: 'Default administrator credentials replaced with cryptographically secure password.'
+      });
+
+      cloud.notify();
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Failed to update password.' };
+    }
   },
 
   updateAdmin: (id: string, updates: Partial<AdminUser>) => {
@@ -1022,6 +1240,8 @@ export const storage = {
   },
 
   saveTimetable: (grid: TimetableGrid, user: string = 'System') => {
+    cloud.lastLocalTimetableMutation = Date.now();
+    const sanitizedGrid = storage.sanitizeTimetableGrid(grid);
     const current = storage.getTimetable();
     const updates: Record<string, any> = {};
     
@@ -1039,8 +1259,8 @@ export const storage = {
         updates[`${KEYS.HISTORY}.${newHistory.id}`] = newHistory;
     }
     
-    localStorage.setItem(KEYS.TIMETABLE, JSON.stringify(grid));
-    updates[KEYS.TIMETABLE] = grid;
+    localStorage.setItem(KEYS.TIMETABLE, JSON.stringify(sanitizedGrid));
+    updates[KEYS.TIMETABLE] = sanitizedGrid;
 
     // Add notification
     const newNote: AppNotification = {

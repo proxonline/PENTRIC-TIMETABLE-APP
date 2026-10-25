@@ -1,0 +1,768 @@
+Generation Report
+
+Generation Report
+306 Errors
+•
+35 Warnings
+Initializing Intelligent Constraint Solver (Goal: BALANCED)...
+16:10:19
+Optimization pass 1 of 3...
+16:10:19
+Optimization pass 1 completed with score 45/100. Noted 7 constraint notices. Analyzing...
+16:10:22
+Missing Lesson Error: Class SS1BC scheduled 2 of 3 configured weekly periods for Commerce (missing 1 periods).
+16:10:22
+Missing Lesson Error: Class SS1BC scheduled 2 of 3 configured weekly periods for Government (missing 1 periods).
+16:10:22
+Missing Lesson Error: Class SS2BC scheduled 3 of 5 configured weekly periods for Mathematics (missing 2 periods).
+16:10:22
+Missing Lesson Error: Class SS2BC scheduled 3 of 5 configured weekly periods for English (missing 2 periods).
+16:10:22
+Missing Lesson Error: Class SS3BC scheduled 4 of 5 configured weekly periods for Mathematics (missing 1 periods).
+16:10:22
+Missing Lesson Error: Class SS3BC scheduled 3 of 5 configured weekly periods for English (missing 2 periods).
+16:10:22
+Missing Lesson Error: Class SS3BC scheduled 2 of 3 configured weekly periods for Commerce (missing 1 periods).
+16:10:22
+Unassigned Periods: Class SS1A1 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:22
+Unassigned Periods: Class SS1A2 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:22
+Unassigned Periods: Class SS1A3 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:22
+Unassigned Periods: Class SS1A4 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:22
+Unassigned Periods: Class SS2A1 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:22
+Unassigned Periods: Class SS2A2 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:22
+Unassigned Periods: Class SS2A3 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:22
+Unassigned Periods: Class SS2A4 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:22
+Unassigned Periods: Class SS3A1 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:22
+Unassigned Periods: Class SS3A2 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:22
+Unassigned Periods: Class SS2BC has 2 unassigned teaching periods. All 36/40 configured curriculum lessons have been allocated.
+16:10:22
+Unassigned Periods: Class SS3BC has 2 unassigned teaching periods. All 36/40 configured curriculum lessons have been allocated.
+16:10:22
+Optimization pass 2 of 3...
+16:10:22
+Optimization pass 2 completed with score 50/100. Noted 6 constraint notices. Analyzing...
+16:10:26
+Missing Lesson Error: Class SS1BC scheduled 2 of 3 configured weekly periods for Commerce (missing 1 periods).
+16:10:26
+Missing Lesson Error: Class SS1BC scheduled 2 of 3 configured weekly periods for Government (missing 1 periods).
+16:10:26
+Missing Lesson Error: Class SS2BC scheduled 3 of 5 configured weekly periods for Mathematics (missing 2 periods).
+16:10:26
+Missing Lesson Error: Class SS2BC scheduled 3 of 5 configured weekly periods for English (missing 2 periods).
+16:10:26
+Missing Lesson Error: Class SS3BC scheduled 4 of 5 configured weekly periods for Mathematics (missing 1 periods).
+16:10:26
+Missing Lesson Error: Class SS3BC scheduled 3 of 5 configured weekly periods for English (missing 2 periods).
+16:10:26
+Unassigned Periods: Class SS1A1 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:26
+Unassigned Periods: Class SS1A2 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:26
+Unassigned Periods: Class SS1A3 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:26
+Unassigned Periods: Class SS1A4 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:26
+Unassigned Periods: Class SS2A1 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:26
+Unassigned Periods: Class SS2A2 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:26
+Unassigned Periods: Class SS2A3 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:26
+Unassigned Periods: Class SS2A4 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:26
+Unassigned Periods: Class SS3A1 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:26
+Unassigned Periods: Class SS3A2 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:26
+Unassigned Periods: Class SS2BC has 2 unassigned teaching periods. All 36/40 configured curriculum lessons have been allocated.
+16:10:26
+Unassigned Periods: Class SS3BC has 1 unassigned teaching periods. All 37/40 configured curriculum lessons have been allocated.
+16:10:26
+Optimization pass 3 of 3...
+16:10:26
+Optimization pass 3 completed with score 45/100. Noted 6 constraint notices. Analyzing...
+16:10:29
+Missing Lesson Error: Class SS1BC scheduled 2 of 3 configured weekly periods for Commerce (missing 1 periods).
+16:10:29
+Missing Lesson Error: Class SS1BC scheduled 2 of 3 configured weekly periods for Government (missing 1 periods).
+16:10:29
+Missing Lesson Error: Class SS2BC scheduled 3 of 5 configured weekly periods for Mathematics (missing 2 periods).
+16:10:29
+Missing Lesson Error: Class SS2BC scheduled 3 of 5 configured weekly periods for English (missing 2 periods).
+16:10:29
+Missing Lesson Error: Class SS3BC scheduled 3 of 5 configured weekly periods for Mathematics (missing 2 periods).
+16:10:29
+Missing Lesson Error: Class SS3BC scheduled 3 of 5 configured weekly periods for English (missing 2 periods).
+16:10:29
+Unassigned Periods: Class SS1A1 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS1A2 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS1A3 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS1A4 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS2A1 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS2A2 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS2A3 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS2A4 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS3A1 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS3A2 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS2BC has 2 unassigned teaching periods. All 36/40 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS3BC has 2 unassigned teaching periods. All 36/40 configured curriculum lessons have been allocated.
+16:10:29
+Solver completed optimization passes. Delivering best optimized timetable schedule with detailed constraint report.
+16:10:29
+Unsatisfied Constraint: Missing Lesson Error: Class SS1BC scheduled 2 of 3 configured weekly periods for Commerce (missing 1 periods).
+16:10:29
+Unsatisfied Constraint: Missing Lesson Error: Class SS1BC scheduled 2 of 3 configured weekly periods for Government (missing 1 periods).
+16:10:29
+Unsatisfied Constraint: Missing Lesson Error: Class SS2BC scheduled 3 of 5 configured weekly periods for Mathematics (missing 2 periods).
+16:10:29
+Unsatisfied Constraint: Missing Lesson Error: Class SS2BC scheduled 3 of 5 configured weekly periods for English (missing 2 periods).
+16:10:29
+Unsatisfied Constraint: Missing Lesson Error: Class SS3BC scheduled 4 of 5 configured weekly periods for Mathematics (missing 1 periods).
+16:10:29
+Unsatisfied Constraint: Missing Lesson Error: Class SS3BC scheduled 3 of 5 configured weekly periods for English (missing 2 periods).
+16:10:29
+Unassigned Periods: Class SS1A1 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS1A2 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS1A3 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS1A4 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS2A1 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS2A2 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS2A3 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS2A4 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS3A1 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS3A2 has 5 unassigned teaching periods. All 33/33 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS2BC has 2 unassigned teaching periods. All 36/40 configured curriculum lessons have been allocated.
+16:10:29
+Unassigned Periods: Class SS3BC has 1 unassigned teaching periods. All 37/40 configured curriculum lessons have been allocated.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for JS1A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for JS1A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach INS for JS1A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach LVF for JS1A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach SCS for JS1A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Business Studies for JS1A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for JS1A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach PHE for JS1A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Yoruba for JS1A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach National Values for JS1A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach IRS / CRS for JS1A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach French for JS1A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach CCA for JS1A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach History for JS1A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Arabic for JS1A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for JS1B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for JS1B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach INS for JS1B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach LVF for JS1B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach SCS for JS1B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Business Studies for JS1B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for JS1B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach PHE for JS1B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Yoruba for JS1B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach National Values for JS1B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach IRS / CRS for JS1B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach French for JS1B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach CCA for JS1B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach History for JS1B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Arabic for JS1B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for JS1C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for JS1C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach INS for JS1C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach LVF for JS1C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach SCS for JS1C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Business Studies for JS1C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for JS1C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach PHE for JS1C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Yoruba for JS1C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach National Values for JS1C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach IRS / CRS for JS1C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach French for JS1C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach CCA for JS1C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach History for JS1C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Arabic for JS1C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for JS1D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for JS1D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach INS for JS1D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach LVF for JS1D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach SCS for JS1D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Business Studies for JS1D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for JS1D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach PHE for JS1D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Yoruba for JS1D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach National Values for JS1D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach IRS / CRS for JS1D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach French for JS1D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach CCA for JS1D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach History for JS1D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Arabic for JS1D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for JS2A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for JS2A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach INS for JS2A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach LVF for JS2A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach SCS for JS2A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Business Studies for JS2A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for JS2A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach PHE for JS2A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Yoruba for JS2A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach National Values for JS2A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach IRS / CRS for JS2A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach French for JS2A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach CCA for JS2A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach History for JS2A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Arabic for JS2A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for JS2B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for JS2B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach INS for JS2B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach LVF for JS2B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach SCS for JS2B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Business Studies for JS2B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for JS2B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach PHE for JS2B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Yoruba for JS2B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach National Values for JS2B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach IRS / CRS for JS2B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach French for JS2B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach CCA for JS2B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach History for JS2B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Arabic for JS2B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for JS2C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for JS2C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach INS for JS2C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach LVF for JS2C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach SCS for JS2C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Business Studies for JS2C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for JS2C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach PHE for JS2C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Yoruba for JS2C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach National Values for JS2C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach IRS / CRS for JS2C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach French for JS2C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach CCA for JS2C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach History for JS2C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Arabic for JS2C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for JS2D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for JS2D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach INS for JS2D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach LVF for JS2D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach SCS for JS2D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Business Studies for JS2D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for JS2D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach PHE for JS2D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Yoruba for JS2D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach National Values for JS2D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach IRS / CRS for JS2D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach French for JS2D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach CCA for JS2D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach History for JS2D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Arabic for JS2D.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for JS3A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for JS3A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach INS for JS3A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach LVF for JS3A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach SCS for JS3A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Business Studies for JS3A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for JS3A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach PHE for JS3A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Yoruba for JS3A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach National Values for JS3A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach IRS / CRS for JS3A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach French for JS3A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach CCA for JS3A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach History for JS3A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Arabic for JS3A.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for JS3B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for JS3B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach INS for JS3B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach LVF for JS3B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach SCS for JS3B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Business Studies for JS3B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for JS3B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach PHE for JS3B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Yoruba for JS3B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach National Values for JS3B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach IRS / CRS for JS3B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach French for JS3B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach CCA for JS3B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach History for JS3B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Arabic for JS3B.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for JS3C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for JS3C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach INS for JS3C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach LVF for JS3C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach SCS for JS3C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Business Studies for JS3C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for JS3C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach PHE for JS3C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Yoruba for JS3C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach National Values for JS3C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach IRS / CRS for JS3C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach French for JS3C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach CCA for JS3C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach History for JS3C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Arabic for JS3C.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for SS1A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for SS1A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Civic Education for SS1A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Physics for SS1A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Chemistry for SS1A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Biology for SS1A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Further Maths / Agric for SS1A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Technical Drawing for SS1A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for SS1A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for SS1A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for SS1A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Civic Education for SS1A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Physics for SS1A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Chemistry for SS1A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Biology for SS1A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Further Maths / Agric for SS1A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Technical Drawing for SS1A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for SS1A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for SS1A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for SS1A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Civic Education for SS1A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Physics for SS1A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Chemistry for SS1A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Biology for SS1A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Further Maths / Agric for SS1A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Technical Drawing for SS1A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for SS1A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for SS1A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for SS1A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Civic Education for SS1A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Physics for SS1A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Chemistry for SS1A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Biology for SS1A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Further Maths / Agric for SS1A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Technical Drawing for SS1A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for SS1A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for SS2A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for SS2A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Civic Education for SS2A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Physics for SS2A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Chemistry for SS2A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Biology for SS2A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Further Maths / Agric for SS2A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Technical Drawing for SS2A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for SS2A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for SS2A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for SS2A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Civic Education for SS2A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Physics for SS2A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Chemistry for SS2A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Biology for SS2A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Further Maths / Agric for SS2A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Technical Drawing for SS2A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for SS2A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for SS2A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for SS2A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Civic Education for SS2A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Physics for SS2A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Chemistry for SS2A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Biology for SS2A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Further Maths / Agric for SS2A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Technical Drawing for SS2A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for SS2A3.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for SS2A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for SS2A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Civic Education for SS2A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Physics for SS2A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Chemistry for SS2A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Biology for SS2A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Further Maths / Agric for SS2A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Technical Drawing for SS2A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for SS2A4.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for SS3A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for SS3A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Civic Education for SS3A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Physics for SS3A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Chemistry for SS3A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Biology for SS3A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Further Maths / Agric for SS3A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Technical Drawing for SS3A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for SS3A1.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for SS3A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for SS3A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Civic Education for SS3A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Physics for SS3A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Chemistry for SS3A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Biology for SS3A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Further Maths / Agric for SS3A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Technical Drawing for SS3A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for SS3A2.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for SS1BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for SS1BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Civic Education for SS1BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Literature in English for SS1BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Economics for SS1BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Accounting for SS1BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Commerce for SS1BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Government for SS1BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for SS1BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Store Management for SS1BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Book Keeping for SS1BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Yoruba for SS1BC.
+16:10:29
+Bottleneck: SS1BC has 40 required curriculum periods assigned, exceeding the 38 available slots.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for SS2BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for SS2BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Civic Education for SS2BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Literature in English for SS2BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Economics for SS2BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Accounting for SS2BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Commerce for SS2BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Government for SS2BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for SS2BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Store Management for SS2BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Book Keeping for SS2BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Yoruba for SS2BC.
+16:10:29
+Bottleneck: SS2BC has 40 required curriculum periods assigned, exceeding the 38 available slots.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Mathematics for SS3BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach English for SS3BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Civic Education for SS3BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Literature in English for SS3BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Economics for SS3BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Accounting for SS3BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Commerce for SS3BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Government for SS3BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach DGT for SS3BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Store Management for SS3BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Book Keeping for SS3BC.
+16:10:29
+Bottleneck: Missing Faculty Data: No teachers registered in school to teach Yoruba for SS3BC.
+16:10:29
+Bottleneck: SS3BC has 40 required curriculum periods assigned, exceeding the 38 available slots.
+16:10:29
+Bottleneck: Missing Required Lesson: Class SS1BC scheduled 2/3 periods for Commerce.
+16:10:29
+Bottleneck: Missing Required Lesson: Class SS1BC scheduled 2/3 periods for Government.
+16:10:29
+Bottleneck: Missing Required Lesson: Class SS2BC scheduled 3/5 periods for Mathematics.
+16:10:29
+Bottleneck: Missing Required Lesson: Class SS2BC scheduled 3/5 periods for English.
+16:10:29
+Bottleneck: Missing Required Lesson: Class SS3BC scheduled 4/5 periods for Mathematics.
+16:10:29
+Bottleneck: Missing Required Lesson: Class SS3BC scheduled 3/5 periods for English.
+16:10:29

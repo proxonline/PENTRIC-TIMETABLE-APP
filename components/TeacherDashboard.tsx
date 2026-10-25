@@ -2,13 +2,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { storage } from '../services/storage';
 import { monitorChatContent } from '../services/ai';
+import { checkProfanity } from '../services/moderation';
 import { ALL_SUBJECTS, ALL_CLASSES, DAYS, PERIODS } from '../constants';
 import { getEligibleSubjectsForClass } from '../services/curriculum_eligibility';
 import { Teacher, Room, Availability, SwapRequest, AppNotification, AppSettings, ChatMessage, TimetableGrid, TeacherAbsence } from '../types';
 import { TimetableGrid as TimetableGridView } from './TimetableGrid';
 import { UserGuide } from './UserGuide';
 import { AboutUsModal } from './AboutUsModal';
-import { Check, LogOut, Save, LayoutGrid, BookOpen, Clock, AlertCircle, BarChart, Send, Bell, Calendar, X, Info, MessageCircle, Settings, User, AlertTriangle, ArrowUpRight, GraduationCap, ChevronRight, Plus, Camera, Mail, Phone, ArrowRight, CheckCircle, RotateCcw, ThumbsUp, ThumbsDown, Filter, CheckCheck, Trash, Menu, Sparkles, Inbox, Zap, Loader2, ArrowLeft, Search, Book, Lock, CreditCard, Palette, Copy, CalendarX, ExternalLink, QrCode, Sun, Moon, School as SchoolIcon } from 'lucide-react';
+import { Check, LogOut, Save, LayoutGrid, BookOpen, Clock, AlertCircle, BarChart, Send, Bell, Calendar, X, Info, MessageCircle, Settings, User, AlertTriangle, ArrowUpRight, GraduationCap, ChevronRight, Plus, Camera, Mail, Phone, ArrowRight, CheckCircle, RotateCcw, ThumbsUp, ThumbsDown, Filter, CheckCheck, Trash, Menu, Sparkles, Inbox, Zap, Loader2, ArrowLeft, Search, Book, Lock, CreditCard, Palette, Copy, CalendarX, ExternalLink, QrCode, Sun, Moon, School as SchoolIcon, ShieldCheck, ShieldAlert } from 'lucide-react';
 
 interface Props {
   onLogout: () => void;
@@ -78,6 +79,7 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
   const [stats, setStats] = useState({ totalHours: 0, freePeriods: 0 });
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
+  const [moderationError, setModerationError] = useState('');
   const [grid, setGrid] = useState<TimetableGrid | null>(null);
   const [viewClassId, setViewClassId] = useState(ALL_CLASSES?.[0]?.id || 'JS1A');
   const [swapModalData, setSwapModalData] = useState<any>(null);
@@ -218,6 +220,9 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
     setRooms(storage.getRooms());
     const t = teachers.find(x => x.id === storage.getLoggedInTeacherId());
     if (t) {
+        if (typeof window !== 'undefined' && localStorage.getItem(`ota_teacher_completed_${t.id}`) === 'true') {
+          t.isCompleted = true;
+        }
         setTeacher(t);
         const allNotes = storage.getNotifications(t.id);
         setNotifications(allNotes);
@@ -233,13 +238,38 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
   };
 
   const handleMarkRead = (id: string) => { storage.markRead(id); loadData(); };
-  const handleChatSend = async () => { 
+  const handleChatSend = async (e?: React.FormEvent) => { 
+      if (e) e.preventDefault();
       if (!teacher || !chatInput.trim()) return; 
-      const content = chatInput; setChatInput(''); 
+
+      const content = chatInput.trim();
+      setModerationError('');
+
+      // Automated pre-send moderation against swear words and profanity
+      const moderation = checkProfanity(content);
+      if (!moderation.isClean) {
+          setModerationError('⚠️ Message blocked: Swear words and inappropriate language are prohibited in the faculty staff room.');
+          showToast('Message blocked by automated moderation.', 'ALERT');
+          return;
+      }
+
+      setChatInput(''); 
       const msgId = crypto.randomUUID(); 
-      storage.addChatMessage({ id: msgId, senderId: teacher.id, senderName: teacher.name, content: content, timestamp: Date.now(), isFlagged: false, handled: true }); 
+      storage.addChatMessage({ 
+          id: msgId, 
+          senderId: teacher.id, 
+          senderName: teacher.name, 
+          content: content, 
+          timestamp: Date.now(), 
+          isFlagged: false, 
+          handled: true 
+      }); 
       loadData(); 
-      monitorChatContent(content).then(check => { if (!check.isSafe) storage.flagMessage(msgId, check.flagReason || "Inappropriate"); }); 
+
+      // Background AI content safety audit
+      monitorChatContent(content).then(check => { 
+          if (!check.isSafe) storage.flagMessage(msgId, check.flagReason || "Inappropriate language"); 
+      }); 
   };
   
   // Logic Handlers
@@ -317,10 +347,13 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
           isCompleted: true 
       };
       
+      try {
+          localStorage.setItem(`ota_teacher_completed_${teacher.id}`, 'true');
+      } catch {}
       storage.saveTeacher(updatedTeacher); 
       setTeacher(updatedTeacher); 
-      setOnboardingStep(2); 
-      setToast({ message: "Welcome aboard!", type: 'SUCCESS' }); 
+      setStep(1); 
+      showToast("Teaching setup complete! Welcome to your timetable.", 'SUCCESS'); 
   };
   
   const handleRequestSubmit = () => { if (!teacher || !msg) return; storage.addRequest({ id: crypto.randomUUID(), teacherId: teacher.id, teacherName: teacher.name, type: 'SWAP', details: msg, status: 'PENDING', timestamp: Date.now() }); setMsg(''); setToast({ message: 'Request submitted', type: 'SUCCESS' }); loadData(); };
@@ -432,8 +465,10 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
 
   if (!teacher) return null;
 
+  const isTeacherCompleted = teacher.isCompleted || (typeof window !== 'undefined' && localStorage.getItem(`ota_teacher_completed_${teacher.id}`) === 'true');
+
   // --- ONBOARDING WIZARD ---
-  if (!teacher.isCompleted) {
+  if (!isTeacherCompleted) {
       const currentClassId = tempSelectedClasses?.[currentOnboardingClassIndex];
       const currentClass = ALL_CLASSES.find(c => c && c.id === currentClassId);
       const search = (onboardingSearch || '').toLowerCase();
@@ -1028,20 +1063,15 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
                     </h2>
                 </div>
                 <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-                    {/* School Name & Switch School Button */}
+                    {/* Active Institution Badge */}
                     <div className="hidden lg:flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold bg-blue-50 border border-blue-200 text-blue-900 shadow-2xs">
-                        <span className="font-extrabold text-blue-700 flex items-center gap-1.5">
+                        <span className="font-extrabold text-blue-700 flex items-center gap-1.5" title={currentSchool.name}>
                             <SchoolIcon size={14} className="text-blue-600" />
                             {currentSchool.name}
                         </span>
-                        {onSwitchSchool && (
-                            <button 
-                                onClick={onSwitchSchool}
-                                className="ml-1 text-[10px] text-blue-600 hover:text-blue-800 font-bold bg-white px-2 py-0.5 rounded-md border border-blue-200/60 shadow-2xs hover:bg-blue-50 transition"
-                            >
-                                Switch
-                            </button>
-                        )}
+                        <span className="text-[10px] bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded-full">
+                            Faculty Portal
+                        </span>
                     </div>
                     <div className="flex items-center gap-1.5 sm:gap-2 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-full text-xs font-semibold bg-slate-100 border border-slate-200 shadow-sm">
                         <span className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ${isFirebaseConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
@@ -1298,27 +1328,137 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
                     </div>
                 )}
                 {step === 2 && (
-                    <div className="h-[calc(100vh-140px)] flex flex-col items-center justify-center bg-white rounded-[2.5rem] border border-slate-200 shadow-sm animate-in fade-in zoom-in duration-500 text-center p-8">
-                        <div className="w-24 h-24 bg-gradient-to-br from-amber-100 to-orange-100 rounded-full flex items-center justify-center shadow-xl shadow-orange-500/10 mb-6">
-                            <Lock size={48} className="text-orange-500" />
+                    <div className="h-[calc(100vh-140px)] flex flex-col bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden animate-in fade-in">
+                        {/* Staff Room Header */}
+                        <div className="p-4 sm:p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/50">
+                            <div>
+                                <div className="flex items-center gap-2">
+                                    <h2 className="text-lg sm:text-xl font-black text-slate-900">Faculty Staff Room</h2>
+                                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-100 text-emerald-800 tracking-wider">
+                                        Live
+                                    </span>
+                                </div>
+                                <p className="text-xs text-slate-500 mt-0.5">Real-time collaboration and discussions between verified faculty & administration</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-slate-200 text-xs text-slate-600 font-semibold shadow-2xs">
+                                    <ShieldCheck size={14} className="text-emerald-600" />
+                                    <span>Automated Moderation Active</span>
+                                </div>
+                            </div>
                         </div>
-                        <div className="max-w-md space-y-4 mb-8">
-                            <h2 className="text-3xl font-black text-slate-900">Premium Feature</h2>
-                            <p className="text-slate-500 text-lg leading-relaxed">
-                                The Staff Room chat is a paid feature. Purchase a license to unlock real-time collaboration.
-                            </p>
+
+                        {/* Moderation Alert Banner if triggered */}
+                        {moderationError && (
+                            <div className="bg-rose-50 border-b border-rose-200 p-3 sm:px-6 flex items-center justify-between gap-2 text-xs text-rose-800 font-semibold animate-in slide-in-from-top-2">
+                                <div className="flex items-center gap-2">
+                                    <ShieldAlert size={16} className="text-rose-600 shrink-0" />
+                                    <span>{moderationError}</span>
+                                </div>
+                                <button onClick={() => setModerationError('')} className="p-1 hover:bg-rose-100 rounded-lg text-rose-600 transition">
+                                    <X size={14} />
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Messages Stream */}
+                        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-slate-50/40 custom-scrollbar">
+                            {chatMessages.length === 0 && (
+                                <div className="flex flex-col items-center justify-center h-full text-slate-400 py-12">
+                                    <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 mb-3">
+                                        <MessageCircle size={28} />
+                                    </div>
+                                    <p className="font-bold text-sm text-slate-700">Welcome to the Faculty Staff Room</p>
+                                    <p className="text-xs text-slate-400 mt-1 max-w-sm text-center">
+                                        Coordinate schedules, communicate with colleagues, or ask administrative questions here.
+                                    </p>
+                                </div>
+                            )}
+
+                            {chatMessages.map((m) => {
+                                const isMe = m.senderId === teacher.id;
+                                const sender = allTeachers.find(t => t.id === m.senderId);
+                                const avatar = sender?.profilePicture || (isMe ? profileData.profilePicture : undefined);
+
+                                return (
+                                    <div 
+                                        key={m.id} 
+                                        className={`flex items-end gap-2.5 ${isMe ? 'justify-end' : 'justify-start'}`}
+                                    >
+                                        {!isMe && (
+                                            <div className="w-8 h-8 rounded-full overflow-hidden shrink-0 border border-slate-200 bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-xs shadow-2xs">
+                                                {avatar ? (
+                                                    <img src={avatar} alt={m.senderName} className="w-full h-full object-cover" />
+                                                ) : (
+                                                    <span>{(m.senderName || 'Staff').charAt(0)}</span>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        <div className={`max-w-[85%] sm:max-w-md rounded-2xl p-3.5 shadow-xs ${
+                                            isMe 
+                                                ? 'bg-blue-600 text-white rounded-br-xs' 
+                                                : 'bg-white text-slate-800 border border-slate-200/80 rounded-bl-xs'
+                                        }`}>
+                                            <div className="flex items-center justify-between gap-3 mb-1">
+                                                <span className={`text-[11px] font-bold ${isMe ? 'text-blue-100' : 'text-slate-900'}`}>
+                                                    {isMe ? 'You' : m.senderName}
+                                                </span>
+                                                <span className={`text-[10px] ${isMe ? 'text-blue-200' : 'text-slate-400'}`}>
+                                                    {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                </span>
+                                            </div>
+
+                                            <p className={`text-xs sm:text-sm leading-relaxed whitespace-pre-wrap break-words ${isMe ? 'text-white' : 'text-slate-700'}`}>
+                                                {m.content}
+                                            </p>
+
+                                            {m.isFlagged && (
+                                                <div className={`mt-2 pt-1.5 border-t text-[10px] font-bold flex items-center gap-1 ${
+                                                    isMe ? 'border-blue-500 text-amber-200' : 'border-slate-100 text-amber-600'
+                                                }`}>
+                                                    <AlertTriangle size={12} />
+                                                    <span>Under moderation review</span>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {isMe && (
+                                            <div className="w-8 h-8 rounded-full overflow-hidden shrink-0 border border-blue-400 bg-blue-600 flex items-center justify-center text-white font-bold text-xs shadow-2xs">
+                                                {avatar ? (
+                                                    <img src={avatar} alt="You" className="w-full h-full object-cover" />
+                                                ) : (
+                                                    <span>{teacher.name.charAt(0)}</span>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                            <div ref={chatEndRef} />
                         </div>
-                        <div className="flex gap-4">
-                            <button 
-                                onClick={() => setStep(0)}
-                                className="px-8 py-4 bg-slate-100 text-slate-600 font-bold rounded-2xl hover:bg-slate-200 transition-all"
+
+                        {/* Chat Input Bar */}
+                        <form onSubmit={handleChatSend} className="p-3 sm:p-4 bg-white border-t border-slate-200 flex items-center gap-2">
+                            <input 
+                                type="text"
+                                value={chatInput}
+                                onChange={(e) => {
+                                    setChatInput(e.target.value);
+                                    if (moderationError) setModerationError('');
+                                }}
+                                placeholder="Message faculty staff room... (Professional standards monitored)"
+                                className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs sm:text-sm font-medium text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
+                            />
+                            <button
+                                type="submit"
+                                disabled={!chatInput.trim()}
+                                className="px-5 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm rounded-xl transition shadow-md shadow-blue-600/20 flex items-center justify-center gap-2 shrink-0"
                             >
-                                Go Back
+                                <Send size={16} />
+                                <span className="hidden sm:inline">Send</span>
                             </button>
-                            <button className="px-8 py-4 bg-slate-900 text-white font-bold rounded-2xl shadow-xl shadow-slate-900/20 hover:bg-slate-800 transition-all flex items-center gap-2">
-                                <CreditCard size={20}/> Purchase Now
-                            </button>
-                        </div>
+                        </form>
                     </div>
                 )}
                 {step === 3 && (

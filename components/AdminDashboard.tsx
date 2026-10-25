@@ -3,15 +3,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { storage } from '../services/storage';
 import { generateTimetable, detectGridConflicts } from '../services/generator';
 import { getEligibleSubjectsForClass, isSubjectEligibleForClass, getSubjectStream, getClassStream } from '../services/curriculum_eligibility';
-import { ALL_CLASSES, ALL_SUBJECTS, DAYS, PERIODS } from '../constants';
+import { ALL_CLASSES, ALL_SUBJECTS, DAYS, PERIODS, TIMETABLE_CONFIG } from '../constants';
 import { LogEntry, TimetableGrid as GridType, Teacher, SwapRequest, AdminUser, AdminTier, AppNotification, Class, Subject, AppSettings, ChatMessage, Conflict, Availability, OptimizationGoal, ReasoningReport, Room, TeacherAbsence, AuditLogEntry, School as SchoolType, AcademicLevel, SlotBudgetInfo, AIFixSuggestion } from '../types';
 import { auditTimetableSchedule, suggestConflictFix, analyzeTimetableLightningFast } from '../services/ai';
 import { TimetableGrid } from './TimetableGrid';
 import { UserGuide } from './UserGuide';
 import { LogViewer } from './LogViewer';
 import { AboutUsModal } from './AboutUsModal';
-import { SyncDiagnostics } from './SyncDiagnostics';
-import { generatePDF, generateExcelWorkbook } from '../services/export_utils';
+import { generatePDF, generateExcelWorkbook, generateMasterPDFBooklet, generateAllClassesCSV } from '../services/export_utils';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, Legend } from 'recharts';
 import * as XLSX from 'xlsx';
 import html2canvas from 'html2canvas';
@@ -24,7 +23,8 @@ import {
   Calendar, Loader2, BarChart2, Zap, MessageSquare, Flag, CheckCheck, Trash, MoreHorizontal, ArrowRight, Grid, Monitor, Sliders, Activity,
   School, CalendarClock, Cpu, AlertOctagon, CalendarRange, Menu, ThumbsUp, ThumbsDown, Inbox, Info, Pencil, ArrowLeft, Terminal, Image,
   ToggleLeft, ToggleRight, Power, RefreshCw, Database, Book, Mail, Phone, GraduationCap, Clock, CreditCard, Sparkles, Palette, MapPin,
-  TrendingUp, UserX, Upload, ClipboardList, BarChart3, Moon, Sun, KeyRound, Building2, CheckCircle2
+  TrendingUp, UserX, Upload, ClipboardList, BarChart3, Moon, Sun, KeyRound, Building2, CheckCircle2,
+  ShieldAlert
 } from 'lucide-react';
 
 interface Props {
@@ -95,7 +95,6 @@ const MENU_ITEMS = [
   { id: 'ADMINS', label: 'Admins', icon: ShieldCheck },
   { id: 'MANUAL', label: 'User Guide', icon: Book },
   { id: 'ABOUT', label: 'About Pentric', icon: Sparkles },
-  { id: 'SYNC_DIAGNOSTICS', label: 'Sync Diagnostics', icon: Activity },
   { id: 'REPORTS', label: 'Logs & Reports', icon: FileText },
 ];
 
@@ -104,7 +103,7 @@ const NAV_GROUPS: { id: string; label: string; icon: any; itemIds: string[] }[] 
     id: 'SCHOOL_MANAGEMENT',
     label: 'School Management',
     icon: School,
-    itemIds: ['SCHOOLS', 'CLASSES', 'SUBJECTS', 'TEACHERS']
+    itemIds: ['CLASSES', 'SUBJECTS', 'TEACHERS']
   },
   {
     id: 'TIMETABLE_OPERATIONS',
@@ -122,7 +121,7 @@ const NAV_GROUPS: { id: string; label: string; icon: any; itemIds: string[] }[] 
     id: 'SYSTEM_SETTINGS',
     label: 'Settings & System',
     icon: Settings,
-    itemIds: ['SETTINGS', 'ADMINS', 'MANUAL', 'ABOUT', 'SYNC_DIAGNOSTICS', 'REPORTS']
+    itemIds: ['SETTINGS', 'ADMINS', 'MANUAL', 'ABOUT', 'REPORTS']
   }
 ];
 
@@ -487,16 +486,36 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
   const [showAiAnalysisModal, setShowAiAnalysisModal] = useState(false);
   const [applyingAiFix, setApplyingAiFix] = useState(false);
 
-  // Ref for Export
+  // Ref for Export & Dropdown
   const timetableRef = useRef<HTMLDivElement>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  const [showExportMenu, setShowExportMenu] = useState(false);
   const [isFirebaseConnected, setIsFirebaseConnected] = useState(false);
+
+  // Mandatory Admin Password Change State
+  const [showMandatoryPasswordModal, setShowMandatoryPasswordModal] = useState(false);
+  const [newAdminPassword, setNewAdminPassword] = useState('');
+  const [confirmAdminPassword, setConfirmAdminPassword] = useState('');
+  const [showAdminPasswordPlain, setShowAdminPasswordPlain] = useState(false);
+  const [adminPasswordError, setAdminPasswordError] = useState('');
+  const [isUpdatingAdminPassword, setIsUpdatingAdminPassword] = useState(false);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setShowExportMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const runLightningAIAnalysis = async (levelToAnalyze: AcademicLevel = curriculumLevelTab) => {
     setIsAiAnalyzingTier(true);
     try {
       const levelSubjects = subjects.filter(s => (s.level || (s.category === 'JSS' || s.category === 'JUNIOR' ? 'JUNIOR' : 'SENIOR')) === levelToAnalyze);
       const levelClasses = classes.filter(c => (c.level || (c.category === 'JSS' || c.category === 'JUNIOR' ? 'JUNIOR' : 'SENIOR')) === levelToAnalyze);
-      const totalSlots = (settings.enableSaturday ? 6 : 5) * (settings.periodsPerDay || 8);
+      const totalSlots = TIMETABLE_CONFIG.INSTRUCTIONAL_SLOTS;
       
       const result = await analyzeTimetableLightningFast(levelToAnalyze, levelSubjects, levelClasses, teachers, totalSlots);
       setAiAnalysisResult(result);
@@ -625,6 +644,10 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
     if (!me) { onLogout(); return; }
 
     setCurrentUser(me);
+    if (me.mustChangePassword || me.password === 'admin123') {
+      setShowMandatoryPasswordModal(true);
+    }
+
     setTeachers(storage.getTeachers());
     setClasses(storage.getClasses());
     setSubjects(storage.getSubjects());
@@ -650,6 +673,52 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
     }
     setChatMessages(storage.getChatMessages());
     setSchools(storage.getSchools());
+  };
+
+  const handleSaveMandatoryPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    setAdminPasswordError('');
+
+    if (newAdminPassword.length < 8) {
+      setAdminPasswordError('Password must be at least 8 characters long.');
+      return;
+    }
+    if (newAdminPassword === 'admin123') {
+      setAdminPasswordError('New password cannot be the insecure default "admin123".');
+      return;
+    }
+    if (newAdminPassword !== confirmAdminPassword) {
+      setAdminPasswordError('Passwords do not match. Please re-enter.');
+      return;
+    }
+
+    setIsUpdatingAdminPassword(true);
+    try {
+      const res = await storage.changeAdminPassword(currentUser.id, newAdminPassword);
+      if (!res.success) {
+        setAdminPasswordError(res.error || 'Failed to update administrator password.');
+        return;
+      }
+
+      try {
+        await fetch('/api/auth/change-admin-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ adminId: currentUser.id, newPassword: newAdminPassword.trim() })
+        });
+      } catch {}
+
+      setCurrentUser(prev => prev ? { ...prev, mustChangePassword: false, password: '***' } : null);
+      setShowMandatoryPasswordModal(false);
+      setNewAdminPassword('');
+      setConfirmAdminPassword('');
+      showToast('Admin password hardened successfully! Access secured.', 'SUCCESS');
+    } catch (err: any) {
+      setAdminPasswordError(err?.message || 'Error updating password.');
+    } finally {
+      setIsUpdatingAdminPassword(false);
+    }
   };
 
   const showToast = (message: string, type: 'INFO'|'ALERT'|'SUCCESS') => {
@@ -695,10 +764,16 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
           // Allow UI to render the loading state before intensive computation
           await new Promise(r => setTimeout(r, 400));
           
+          // Ensure freshest authoritative roster and data are loaded directly from storage
+          const freshTeachers = storage.getTeachers();
+          const freshClasses = classes.length > 0 ? classes : storage.getClasses();
+          const freshSubjects = subjects.length > 0 ? subjects : storage.getSubjects();
+          setTeachers(freshTeachers);
+
           const result = await generateTimetable(
-            teachers, 
-            classes, 
-            subjects, 
+            freshTeachers, 
+            freshClasses, 
+            freshSubjects, 
             optimizationGoal, 
             (p, log) => { 
                 setGenerationProgress(p);
@@ -770,7 +845,10 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
       if (!deleteModal) return;
       const { type, id } = deleteModal;
       
-      if (type === 'TEACHER') storage.deleteTeacher(id);
+      if (type === 'TEACHER') {
+          storage.deleteTeacher(id);
+          setTeachers(prev => prev.filter(t => t.id !== id));
+      }
       else if (type === 'CLASS') storage.deleteClass(id);
       else if (type === 'SUBJECT') storage.deleteSubject(id);
       else if (type === 'ROOM') storage.deleteRoom(id);
@@ -1258,7 +1336,7 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
                     <h2 className="font-bold text-xl text-slate-800">{activeView === 'DASHBOARD' ? 'Dashboard' : MENU_ITEMS.find(m=>m.id===activeView)?.label}</h2>
                 </div>
                 <div className="flex items-center gap-4">
-                    {/* School Name & Switch School Button */}
+                    {/* Active Institution Badge (School Switching Locked while in portal) */}
                     <div className="hidden sm:flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold bg-blue-50 border border-blue-200 text-blue-900 shadow-2xs">
                         <span 
                             onClick={(e) => {
@@ -1272,14 +1350,9 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
                             <School size={14} className="text-blue-600" />
                             {currentSchool.name}
                         </span>
-                        {onSwitchSchool && (
-                            <button 
-                                onClick={onSwitchSchool}
-                                className="ml-1 text-[10px] text-blue-600 hover:text-blue-800 font-bold bg-white px-2 py-0.5 rounded-md border border-blue-200/60 shadow-2xs hover:bg-blue-50 transition"
-                            >
-                                Switch School
-                            </button>
-                        )}
+                        <span className="text-[10px] bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded-full" title="To switch or register a school, sign out first">
+                            Active Institution
+                        </span>
                     </div>
                     <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-100 border border-slate-200 shadow-sm">
                         <span className={`w-2.5 h-2.5 rounded-full ${isFirebaseConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
@@ -1573,14 +1646,17 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
                                     <h2 className="text-xl font-bold text-slate-800">Time Configuration</h2>
                                 </div>
                                 <div className="space-y-5">
-                                    <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100">
+                                    <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100 opacity-75">
                                         <div>
-                                            <div className="font-bold text-slate-800">Enable Saturday School</div>
-                                            <div className="text-xs text-slate-500">Include Saturday in timeline generation</div>
+                                            <div className="font-bold text-slate-800 flex items-center gap-2">
+                                                <span>Saturday School</span>
+                                                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-200 text-slate-600 uppercase">Standard OTA</span>
+                                            </div>
+                                            <div className="text-xs text-slate-500">OTA timetable standard is Monday–Friday (38 instructional teaching slots)</div>
                                         </div>
-                                        <button onClick={() => handleSettingChange('enableSaturday', !settings.enableSaturday)} className={`text-2xl transition-colors ${settings.enableSaturday ? 'text-blue-600' : 'text-slate-300'}`}>
-                                            {settings.enableSaturday ? <ToggleRight size={40}/> : <ToggleLeft size={40}/>}
-                                        </button>
+                                        <div className="text-xs font-bold text-slate-500 px-3 py-1.5 bg-slate-200/60 rounded-lg">
+                                            Mon–Fri (38 Slots)
+                                        </div>
                                     </div>
                                     <div className="grid grid-cols-2 gap-4">
                                         <div>
@@ -1938,32 +2014,111 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
                                     <span>AI Audit</span>
                                 </button>
 
-                                <button 
-                                    onClick={handleSaveAsPNG} 
-                                    className="w-full sm:w-auto px-4 py-3 bg-emerald-600 text-white text-sm font-bold rounded-xl hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20"
-                                    title="Export Schedule as PNG Image"
-                                >
-                                    <Image size={18}/> 
-                                    <span>PNG</span>
-                                </button>
+                                {/* TIMETABLE EXPORT DROPDOWN (ALL CLASSES) */}
+                                <div className="relative w-full sm:w-auto" ref={exportMenuRef}>
+                                    <button
+                                        onClick={() => setShowExportMenu(!showExportMenu)}
+                                        className="w-full sm:w-auto px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl transition-all shadow-lg shadow-indigo-600/20 flex items-center justify-center gap-2"
+                                        title="Export Timetables (All Classes)"
+                                    >
+                                        <Download size={18} />
+                                        <span>Export Timetables</span>
+                                        <ChevronDown size={16} className={showExportMenu ? 'rotate-180 transition-transform' : 'transition-transform'} />
+                                    </button>
 
-                                <button 
-                                    onClick={() => generatePDF(grid || {}, selectedClassId, 'CLASS', settings.schoolName, settings.currentTerm, classes, subjects, teachers, rooms)} 
-                                    className="w-full sm:w-auto px-4 py-3 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold text-sm rounded-xl transition border border-indigo-200/80 flex items-center justify-center gap-2"
-                                    title="Export Schedule as PDF Document"
-                                >
-                                    <Printer size={18} className="text-indigo-600"/>
-                                    <span>PDF</span>
-                                </button>
+                                    {showExportMenu && (
+                                        <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-2xl border border-slate-200 py-3 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+                                            <div className="px-4 py-2 border-b border-slate-100">
+                                                <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">Complete School Export (All Classes)</div>
+                                            </div>
+                                            
+                                            <button
+                                                onClick={() => {
+                                                    setShowExportMenu(false);
+                                                    generateMasterPDFBooklet(grid || {}, settings.schoolName, settings.currentTerm, classes, subjects, teachers, rooms);
+                                                }}
+                                                className="w-full px-4 py-3 text-left hover:bg-indigo-50/80 transition-colors flex items-start gap-3 group"
+                                            >
+                                                <div className="p-2 rounded-lg bg-rose-50 text-rose-600 group-hover:bg-rose-100 transition-colors mt-0.5">
+                                                    <FileText size={18} />
+                                                </div>
+                                                <div>
+                                                    <div className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+                                                        <span>Master PDF Booklet</span>
+                                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 font-bold">All Classes</span>
+                                                    </div>
+                                                    <p className="text-xs text-slate-500">Every class timetable in a single paginated booklet</p>
+                                                </div>
+                                            </button>
 
-                                <button 
-                                    onClick={() => generateExcelWorkbook(grid || {}, 'CLASSES', settings.schoolName, settings.currentTerm, classes, subjects, teachers, rooms)} 
-                                    className="w-full sm:w-auto px-4 py-3 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 font-bold text-sm rounded-xl transition border border-emerald-200/80 flex items-center justify-center gap-2"
-                                    title="Export Schedule as Excel Workbook"
-                                >
-                                    <Download size={18} className="text-emerald-600"/>
-                                    <span>Excel</span>
-                                </button>
+                                            <button
+                                                onClick={() => {
+                                                    setShowExportMenu(false);
+                                                    generateExcelWorkbook(grid || {}, 'CLASSES', settings.schoolName, settings.currentTerm, classes, subjects, teachers, rooms);
+                                                }}
+                                                className="w-full px-4 py-3 text-left hover:bg-emerald-50/80 transition-colors flex items-start gap-3 group"
+                                            >
+                                                <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600 group-hover:bg-emerald-100 transition-colors mt-0.5">
+                                                    <Download size={18} />
+                                                </div>
+                                                <div>
+                                                    <div className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+                                                        <span>Excel Workbook (.xlsx)</span>
+                                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-bold">All Classes</span>
+                                                    </div>
+                                                    <p className="text-xs text-slate-500">Full multi-sheet workbook with all classes & master grid</p>
+                                                </div>
+                                            </button>
+
+                                            <button
+                                                onClick={() => {
+                                                    setShowExportMenu(false);
+                                                    generateAllClassesCSV(grid || {}, settings.schoolName, settings.currentTerm, classes, subjects, teachers, rooms);
+                                                }}
+                                                className="w-full px-4 py-3 text-left hover:bg-blue-50/80 transition-colors flex items-start gap-3 group"
+                                            >
+                                                <div className="p-2 rounded-lg bg-blue-50 text-blue-600 group-hover:bg-blue-100 transition-colors mt-0.5">
+                                                    <ClipboardList size={18} />
+                                                </div>
+                                                <div>
+                                                    <div className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+                                                        <span>Master CSV Spreadsheet</span>
+                                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-bold">All Classes</span>
+                                                    </div>
+                                                    <p className="text-xs text-slate-500">Universal comma-separated spreadsheet of all classes</p>
+                                                </div>
+                                            </button>
+
+                                            <div className="my-1 border-t border-slate-100"></div>
+
+                                            <div className="px-4 py-1.5">
+                                                <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">Single Class Export ({classes.find(c => c.id === selectedClassId)?.name || selectedClassId})</div>
+                                            </div>
+
+                                            <button
+                                                onClick={() => {
+                                                    setShowExportMenu(false);
+                                                    generatePDF(grid || {}, selectedClassId, 'CLASS', settings.schoolName, settings.currentTerm, classes, subjects, teachers, rooms);
+                                                }}
+                                                className="w-full px-4 py-2.5 text-left hover:bg-slate-50 transition-colors flex items-center gap-3 text-slate-700"
+                                            >
+                                                <Printer size={16} className="text-indigo-600" />
+                                                <span className="text-xs font-semibold">Print / PDF (Current Class Only)</span>
+                                            </button>
+
+                                            <button
+                                                onClick={() => {
+                                                    setShowExportMenu(false);
+                                                    handleSaveAsPNG();
+                                                }}
+                                                className="w-full px-4 py-2.5 text-left hover:bg-slate-50 transition-colors flex items-center gap-3 text-slate-700"
+                                            >
+                                                <Image size={16} className="text-slate-600" />
+                                                <span className="text-xs font-semibold">Save Image (PNG Snapshot)</span>
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
                                 {generationLogs.length > 0 && (
                                     <button 
                                         onClick={() => setShowGenReport(true)} 
@@ -2268,9 +2423,11 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
                             const scienceClasses = seniorClasses.filter(c => (c.stream || '').toUpperCase() === 'SCIENCE' || /SS\d+A\d*/i.test(c.id));
                             const bcClasses = seniorClasses.filter(c => (c.stream || '').toUpperCase() === 'BC' || c.id.includes('BC'));
 
-                            // 40 total grid periods - 2 reserved Friday Worship periods = 38 instructional teaching periods
-                            const gridTotalSlots = (settings.enableSaturday ? 6 : 5) * (settings.periodsPerDay || 8);
-                            const teachingCapacity = gridTotalSlots - 2;
+                            // Authoritative 38 instructional teaching slots (Monday-Friday, 8 periods/day, excluding Friday Worship P7 & P8)
+                            const teachingCapacity = TIMETABLE_CONFIG.INSTRUCTIONAL_SLOTS;
+                            const gridTotalSlots = TIMETABLE_CONFIG.TOTAL_GRID_SLOTS;
+
+
 
                             const activeSubjects = curriculumLevelTab === 'JUNIOR' 
                                 ? juniorSubjects 
@@ -2866,253 +3023,46 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
                     </div>
                 )}
 
-                {/* SCHOOLS REGISTRY VIEW */}
+                {/* SCHOOLS REGISTRY VIEW - LOCKED WHILE AUTHENTICATED INSIDE A SCHOOL PORTAL */}
                 {activeView === 'SCHOOLS' && (
-                    <div className="space-y-8 animate-in fade-in duration-300">
-                        {/* Header & Controls */}
-                        <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm">
-                            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-6 border-b border-slate-100">
-                                <div>
-                                    <div className="flex items-center gap-3 mb-1">
-                                        <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center shadow-xs">
-                                            <School size={24} />
-                                        </div>
-                                        <div>
-                                            <h2 className="text-2xl font-black text-slate-900 flex items-center gap-2">
-                                                Institutional Directory & Registry
-                                                <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                                    Zero Default Data
-                                                </span>
-                                            </h2>
-                                            <p className="text-slate-500 text-xs">
-                                                Manually register and administer educational institutions. Zero sample or default records are pre-populated into Firestore.
-                                            </p>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div className="flex items-center gap-3">
-                                    <button
-                                        onClick={() => {
-                                            setSchoolFormError('');
-                                            setShowSchoolModal(true);
-                                        }}
-                                        className="px-6 py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs rounded-2xl shadow-lg shadow-blue-600/25 transition flex items-center gap-2"
-                                    >
-                                        <ShieldCheck size={18} /> + Register New School (Secure)
-                                    </button>
-                                </div>
+                    <div className="max-w-2xl mx-auto space-y-6 animate-in fade-in py-10">
+                        <div className="bg-white rounded-[2.5rem] border border-amber-200 p-8 md:p-10 shadow-sm text-center space-y-5">
+                            <div className="w-16 h-16 bg-amber-50 text-amber-600 rounded-3xl mx-auto flex items-center justify-center shadow-inner">
+                                <Lock size={32} />
                             </div>
-
-                            {/* Security Standard Banner */}
-                            <div className="mt-6 p-4 bg-gradient-to-r from-blue-50/80 via-indigo-50/50 to-slate-50 rounded-2xl border border-blue-200/80 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                                <div className="flex items-start gap-3">
-                                    <ShieldCheck className="w-6 h-6 text-blue-600 shrink-0 mt-0.5" />
-                                    <div>
-                                        <span className="font-extrabold text-xs text-blue-950 block">
-                                            Zero-Trust & Zero Default Data Protocol Active
-                                        </span>
-                                        <span className="text-[11px] text-blue-800 leading-relaxed block">
-                                            The live Firestore database is preserved without pre-populated dummy entries. Only explicit, manual registrations signed by an authorized administrator are committed to the cloud.
-                                        </span>
-                                    </div>
-                                </div>
-                                <div className="flex items-center gap-2 shrink-0">
-                                    <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white rounded-xl border border-slate-200 text-[11px] font-bold text-slate-700 shadow-xs">
-                                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                                        Firestore Isolated & Synced
-                                    </div>
-                                </div>
+                            <div>
+                                <h2 className="text-2xl font-black text-slate-900 tracking-tight">
+                                    School Registry & Switching Locked
+                                </h2>
+                                <p className="text-sm text-slate-500 mt-1">
+                                    Active School Session: <strong className="text-slate-800">{currentSchool.name}</strong>
+                                </p>
                             </div>
-
-                            {/* Summary Metrics */}
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6">
-                                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80">
-                                    <div className="text-[10px] font-black uppercase text-slate-400">Total Registered</div>
-                                    <div className="text-xl font-black text-slate-900 mt-1">{schools.length} Institutions</div>
-                                </div>
-                                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80">
-                                    <div className="text-[10px] font-black uppercase text-slate-400">Active Portals</div>
-                                    <div className="text-xl font-black text-emerald-600 mt-1">
-                                        {schools.filter(s => s.status !== 'ARCHIVED').length} Online
-                                    </div>
-                                </div>
-                                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80">
-                                    <div className="text-[10px] font-black uppercase text-slate-400">Current Context</div>
-                                    <div className="text-xl font-black text-blue-600 mt-1 truncate" title={currentSchool.name}>
-                                        {currentSchool.name}
-                                    </div>
-                                </div>
-                                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80">
-                                    <div className="text-[10px] font-black uppercase text-slate-400">Pre-population Check</div>
-                                    <div className="text-xl font-black text-purple-600 mt-1">0 Mock Records</div>
-                                </div>
+                            <div className="p-5 bg-amber-50/80 rounded-2xl border border-amber-200/80 text-xs text-amber-900 text-left space-y-2">
+                                <p className="font-extrabold uppercase tracking-wide text-[11px] text-amber-950 flex items-center gap-1.5">
+                                    <ShieldCheck size={14} className="text-amber-700" /> Institution Isolation Policy
+                                </p>
+                                <p className="leading-relaxed">
+                                    To protect academic data integrity and prevent cross-school contamination, institution switching and school registration are restricted while you are logged into an active school portal.
+                                </p>
+                                <p className="font-bold text-amber-950 pt-1">
+                                    To switch institutions or register a new school, please sign out of {currentSchool.name} first.
+                                </p>
                             </div>
-
-                            {/* Search & Filter Bar */}
-                            <div className="mt-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-                                <div className="relative w-full sm:w-80">
-                                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                                    <input
-                                        type="text"
-                                        placeholder="Search by name, code, city, accreditation..."
-                                        value={schoolSearch}
-                                        onChange={(e) => setSchoolSearch(e.target.value)}
-                                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500/30 transition"
-                                    />
-                                </div>
-                                <div className="text-xs text-slate-400 font-bold self-end sm:self-center">
-                                    Showing {schools.filter(s => {
-                                        const q = (schoolSearch || '').toLowerCase().trim();
-                                        if (!q) return true;
-                                        return (
-                                            (s.name && s.name.toLowerCase().includes(q)) ||
-                                            (s.code && s.code.toLowerCase().includes(q)) ||
-                                            (s.address && s.address.toLowerCase().includes(q)) ||
-                                            (s.accreditationNumber && s.accreditationNumber.toLowerCase().includes(q))
-                                        );
-                                    }).length} of {schools.length} institutions
-                                </div>
+                            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+                                <button
+                                    onClick={() => setActiveView('DASHBOARD')}
+                                    className="w-full sm:w-auto px-6 py-3 rounded-xl border border-slate-300 text-slate-700 text-xs font-bold hover:bg-slate-50 transition"
+                                >
+                                    Return to Dashboard
+                                </button>
+                                <button
+                                    onClick={handleAdminSignOut}
+                                    className="w-full sm:w-auto px-6 py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold transition shadow-sm flex items-center justify-center gap-2"
+                                >
+                                    <LogOut size={15} /> Sign Out of {currentSchool.name}
+                                </button>
                             </div>
-                        </div>
-
-                        {/* Cards Grid */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                            {schools
-                                .filter(s => {
-                                    const q = (schoolSearch || '').toLowerCase().trim();
-                                    if (!q) return true;
-                                    return (
-                                        (s.name && s.name.toLowerCase().includes(q)) ||
-                                        (s.code && s.code.toLowerCase().includes(q)) ||
-                                        (s.address && s.address.toLowerCase().includes(q)) ||
-                                        (s.accreditationNumber && s.accreditationNumber.toLowerCase().includes(q))
-                                    );
-                                })
-                                .map(school => {
-                                    const isCurrent = school.id === currentSchool.id;
-                                    const theme = school.themeColor || '#2563eb';
-                                    return (
-                                        <div
-                                            key={school.id}
-                                            className={`bg-white rounded-[2rem] border overflow-hidden transition-all shadow-sm hover:shadow-md flex flex-col justify-between ${
-                                                isCurrent ? 'border-blue-600 ring-2 ring-blue-600/20' : 'border-slate-200'
-                                            }`}
-                                        >
-                                            <div>
-                                                {/* Top Color Accent */}
-                                                <div className="h-3 w-full" style={{ backgroundColor: theme }} />
-
-                                                <div className="p-6 space-y-4">
-                                                    {/* Header with Code Badge */}
-                                                    <div className="flex items-start justify-between gap-3">
-                                                        <div className="flex items-center gap-3">
-                                                            <div
-                                                                className="w-12 h-12 rounded-2xl flex items-center justify-center font-black text-white text-base shadow-sm shrink-0"
-                                                                style={{ backgroundColor: theme }}
-                                                            >
-                                                                {school.code || (school.name.substring(0, 3).toUpperCase())}
-                                                            </div>
-                                                            <div>
-                                                                <h3 className="font-black text-slate-900 text-base leading-tight">
-                                                                    {school.name}
-                                                                </h3>
-                                                                {school.code && (
-                                                                    <span className="text-[10px] font-mono font-bold text-slate-400 uppercase">
-                                                                        Code: {school.code}
-                                                                    </span>
-                                                                )}
-                                                            </div>
-                                                        </div>
-
-                                                        {isCurrent ? (
-                                                            <span className="text-[10px] font-extrabold uppercase px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
-                                                                Active Portal
-                                                            </span>
-                                                        ) : school.isOta ? (
-                                                            <span className="text-[10px] font-extrabold uppercase px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 shrink-0">
-                                                                Founding Anchor
-                                                            </span>
-                                                        ) : (
-                                                            <span className="text-[10px] font-extrabold uppercase px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
-                                                                Manual Registry
-                                                            </span>
-                                                        )}
-                                                    </div>
-
-                                                    {/* Motto */}
-                                                    {school.motto && (
-                                                        <p className="text-xs text-slate-500 italic bg-slate-50/70 p-3 rounded-xl border border-slate-100">
-                                                            "{school.motto}"
-                                                        </p>
-                                                    )}
-
-                                                    {/* Metadata Details */}
-                                                    <div className="space-y-2 text-xs text-slate-600 pt-2 border-t border-slate-100">
-                                                        {school.address && (
-                                                            <div className="flex items-center gap-2">
-                                                                <MapPin size={14} className="text-slate-400 shrink-0" />
-                                                                <span className="truncate">{school.address}</span>
-                                                            </div>
-                                                        )}
-                                                        {school.adminEmail && (
-                                                            <div className="flex items-center gap-2">
-                                                                <Mail size={14} className="text-slate-400 shrink-0" />
-                                                                <span className="truncate">{school.adminEmail}</span>
-                                                            </div>
-                                                        )}
-                                                        {school.adminPhone && (
-                                                            <div className="flex items-center gap-2">
-                                                                <Phone size={14} className="text-slate-400 shrink-0" />
-                                                                <span>{school.adminPhone}</span>
-                                                            </div>
-                                                        )}
-                                                        {school.accreditationNumber && (
-                                                            <div className="flex items-center gap-2 font-mono text-[11px] text-slate-500">
-                                                                <GraduationCap size={14} className="text-slate-400 shrink-0" />
-                                                                <span>Lic: {school.accreditationNumber}</span>
-                                                            </div>
-                                                        )}
-                                                        {school.registeredBy && (
-                                                            <div className="text-[10px] text-slate-400 pt-1">
-                                                                Registered by: <span className="font-semibold text-slate-600">{school.registeredBy}</span>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            {/* Action Bar */}
-                                            <div className="p-4 bg-slate-50/80 border-t border-slate-100 flex items-center justify-between gap-2">
-                                                <button
-                                                    onClick={() => handleSwitchSchoolContext(school)}
-                                                    className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
-                                                        isCurrent
-                                                            ? 'bg-blue-600 text-white shadow-sm'
-                                                            : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
-                                                    }`}
-                                                >
-                                                    {isCurrent ? <CheckCircle2 size={14} /> : <ArrowRight size={14} />}
-                                                    {isCurrent ? 'Current Context' : 'Switch to School'}
-                                                </button>
-
-                                                {school.id !== 'ota_total_academy' && (
-                                                    <button
-                                                        onClick={() => {
-                                                            setSchoolToDelete(school);
-                                                            setDeletePasskey('');
-                                                            setDeleteError('');
-                                                        }}
-                                                        className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition"
-                                                        title="Delete Institution (Requires Master Passkey)"
-                                                    >
-                                                        <Trash2 size={16} />
-                                                    </button>
-                                                )}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
                         </div>
                     </div>
                 )}
@@ -3333,10 +3283,6 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
                         </div>
                     </div>
                 )}
-                {/* SYNC DIAGNOSTICS VIEW */}
-                {activeView === 'SYNC_DIAGNOSTICS' && (
-                    <SyncDiagnostics />
-                )}
             </main>
         </div>
 
@@ -3536,7 +3482,8 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
                         {/* SUBJECT SPECIFIC FIELDS (With Live Remaining Spaces Calculator) */}
                         {modalType === 'SUBJECT' && (() => {
                             const selectedLevel: AcademicLevel = entityForm.level || 'JUNIOR';
-                            const totalCapacity = (settings.enableSaturday ? 6 : 5) * (settings.periodsPerDay || 8); // 40
+                            const totalCapacity = TIMETABLE_CONFIG.INSTRUCTIONAL_SLOTS; // 38 instructional teaching slots
+
                             
                             const otherSubjectsSum = subjects
                                 .filter(s => s.id !== entityForm.id && (s.level || (s.category === 'JSS' || s.category === 'JUNIOR' ? 'JUNIOR' : 'SENIOR')) === selectedLevel)
@@ -4483,6 +4430,133 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
                             Done
                         </button>
                     </div>
+                </div>
+            </div>
+        )}
+
+        {/* MANDATORY ADMIN PASSWORD HARDENING MODAL */}
+        {showMandatoryPasswordModal && (
+            <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex items-center justify-center p-4 animate-in fade-in duration-200">
+                <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-200">
+                    <div className="bg-gradient-to-r from-amber-500 via-rose-500 to-red-600 p-6 text-white text-center">
+                        <div className="w-16 h-16 mx-auto mb-3 rounded-2xl bg-white/20 backdrop-blur-sm border border-white/30 flex items-center justify-center shadow-lg">
+                            <ShieldAlert size={32} className="text-white animate-pulse" />
+                        </div>
+                        <h3 className="text-xl font-black tracking-tight">Security Hardening Required</h3>
+                        <p className="text-xs text-white/90 font-medium mt-1">Default Administrator Password Detected</p>
+                    </div>
+
+                    <form onSubmit={handleSaveMandatoryPassword} className="p-6 space-y-4">
+                        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-xs text-amber-900 leading-relaxed space-y-1.5">
+                            <div className="font-bold flex items-center gap-1.5 text-amber-950">
+                                <AlertTriangle size={15} className="text-amber-600 shrink-0" />
+                                <span>Action Required Before Continuing</span>
+                            </div>
+                            <p>
+                                Your administrative account is currently secured with the factory default password (<code className="px-1.5 py-0.5 bg-amber-100 rounded text-[11px] font-mono font-bold text-amber-900">admin123</code>), which leaves school timetables and faculty records vulnerable to unauthorized access.
+                            </p>
+                            <p className="font-semibold text-amber-950">
+                                You must create a unique, strong administrator password to proceed.
+                            </p>
+                        </div>
+
+                        {adminPasswordError && (
+                            <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 font-semibold flex items-center gap-2">
+                                <AlertOctagon size={16} className="text-red-500 shrink-0" />
+                                <span>{adminPasswordError}</span>
+                            </div>
+                        )}
+
+                        <div className="space-y-3">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-700 mb-1">
+                                    New Administrator Password
+                                </label>
+                                <div className="relative">
+                                    <input
+                                        type={showAdminPasswordPlain ? "text" : "password"}
+                                        value={newAdminPassword}
+                                        onChange={e => setNewAdminPassword(e.target.value)}
+                                        placeholder="Enter minimum 8 characters"
+                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition pr-10"
+                                        required
+                                        minLength={8}
+                                        autoFocus
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowAdminPasswordPlain(!showAdminPasswordPlain)}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                                    >
+                                        {showAdminPasswordPlain ? <EyeOff size={16} /> : <Eye size={16} />}
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-slate-700 mb-1">
+                                    Confirm New Password
+                                </label>
+                                <input
+                                    type={showAdminPasswordPlain ? "text" : "password"}
+                                    value={confirmAdminPassword}
+                                    onChange={e => setConfirmAdminPassword(e.target.value)}
+                                    placeholder="Re-enter your new password"
+                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition"
+                                    required
+                                    minLength={8}
+                                />
+                            </div>
+                        </div>
+
+                        <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-[11px] text-slate-600 space-y-1 font-medium">
+                            <div className="font-bold text-slate-700">Security Requirements:</div>
+                            <div className="flex items-center gap-1.5">
+                                <span className={newAdminPassword.length >= 8 ? "text-emerald-600 font-bold" : "text-slate-400"}>
+                                    {newAdminPassword.length >= 8 ? "✓" : "○"} At least 8 characters
+                                </span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <span className={newAdminPassword && newAdminPassword !== 'admin123' ? "text-emerald-600 font-bold" : "text-slate-400"}>
+                                    {newAdminPassword && newAdminPassword !== 'admin123' ? "✓" : "○"} Not the default "admin123"
+                                </span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <span className={newAdminPassword && newAdminPassword === confirmAdminPassword ? "text-emerald-600 font-bold" : "text-slate-400"}>
+                                    {newAdminPassword && newAdminPassword === confirmAdminPassword ? "✓" : "○"} Passwords match
+                                </span>
+                            </div>
+                        </div>
+
+                        <div className="pt-2 flex flex-col gap-2">
+                            <button
+                                type="submit"
+                                disabled={isUpdatingAdminPassword || newAdminPassword.length < 8 || newAdminPassword === 'admin123' || newAdminPassword !== confirmAdminPassword}
+                                className="w-full py-3.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm rounded-xl transition shadow-lg shadow-rose-600/25 flex items-center justify-center gap-2"
+                            >
+                                {isUpdatingAdminPassword ? (
+                                    <>
+                                        <Loader2 size={16} className="animate-spin" />
+                                        <span>Securing Credentials...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Lock size={16} />
+                                        <span>Update & Secure Administrator Account</span>
+                                    </>
+                                )}
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={handleAdminSignOut}
+                                className="w-full py-2.5 text-xs font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition flex items-center justify-center gap-1.5"
+                            >
+                                <LogOut size={14} />
+                                <span>Sign Out Instead</span>
+                            </button>
+                        </div>
+                    </form>
                 </div>
             </div>
         )}

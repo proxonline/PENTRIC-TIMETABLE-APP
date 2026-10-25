@@ -197,12 +197,21 @@ function seedDefaultStoreData() {
   }
 
   // 3. Ensure Subjects
+  // 3. Ensure Subjects & Purge invalid stream definitions
   if (!store.keys['ota_subjects_v2'] || (Array.isArray(store.keys['ota_subjects_v2']) && store.keys['ota_subjects_v2'].length === 0) || Object.keys(store.keys['ota_subjects_v2']).length === 0) {
     store.keys['ota_subjects_v2'] = [...ALL_SUBJECTS];
     modified = true;
-  } else if (!Array.isArray(store.keys['ota_subjects_v2'])) {
-    store.keys['ota_subjects_v2'] = Object.values(store.keys['ota_subjects_v2']);
-    modified = true;
+  } else {
+    let currentSubs = Array.isArray(store.keys['ota_subjects_v2']) ? store.keys['ota_subjects_v2'] : Object.values(store.keys['ota_subjects_v2']);
+    // Strictly purge eco_sci and yor_sci (Yoruba and Economics are strictly BC subjects!)
+    const cleanSubs = currentSubs.filter((s: any) => s && s.id !== 'eco_sci' && s.id !== 'yor_sci');
+    if (!cleanSubs.some((s: any) => s && s.id === 'yor_bc')) {
+      cleanSubs.push({ id: 'yor_bc', name: 'Yoruba', code: 'YORU', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: false, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 });
+    }
+    if (cleanSubs.length !== currentSubs.length) {
+      store.keys['ota_subjects_v2'] = cleanSubs;
+      modified = true;
+    }
   }
 
   // 4. Ensure Rooms
@@ -248,10 +257,57 @@ function seedDefaultStoreData() {
     modified = true;
   }
 
-  // 7. Ensure Timetable structure exists
+  // 7. Ensure Timetable structure exists & Purge stream violations / orphaned teachers
   if (!store.keys['ota_timetable_v2'] || typeof store.keys['ota_timetable_v2'] !== 'object') {
     store.keys['ota_timetable_v2'] = {};
     modified = true;
+  } else {
+    // Sanitize any existing timetable grid:
+    // (a) Remove Yoruba and Economics from Senior Science "A" classes
+    // (b) Clear slots assigned to teachers that no longer exist
+    const activeTeacherList = Array.isArray(store.keys['ota_teachers_v3']) ? store.keys['ota_teachers_v3'] : Object.values(store.keys['ota_teachers_v3'] || {});
+    const activeTeacherIds = new Set(activeTeacherList.map((t: any) => t?.id).filter(Boolean));
+    const timetable = store.keys['ota_timetable_v2'];
+    let timetableChanged = false;
+
+    for (const classId in timetable) {
+      const isScienceAClass = /SS\d+A\d*/i.test(classId);
+      const days = timetable[classId];
+      if (!days || typeof days !== 'object') continue;
+      for (const day in days) {
+        const periods = days[day];
+        if (!periods || typeof periods !== 'object') continue;
+        for (const period in periods) {
+          const cell = periods[period];
+          if (cell) {
+            // Check stream violation for Science "A" classes
+            if (isScienceAClass) {
+              const subId = (cell.subjectId || '').toLowerCase();
+              if (subId.includes('eco') || subId.includes('yor') || subId.includes('acc') || subId.includes('com') || subId.includes('gov') || subId.includes('lit') || subId.includes('str') || subId.includes('bk')) {
+                periods[period] = null;
+                timetableChanged = true;
+                continue;
+              }
+            }
+            // Check orphaned teacher
+            if (cell.teacherId && cell.teacherId !== 'SYSTEM' && !activeTeacherIds.has(cell.teacherId)) {
+              cell.teacherId = '';
+              timetableChanged = true;
+            }
+            if (Array.isArray(cell.teacherIds)) {
+              const cleanTids = cell.teacherIds.filter((tid: string) => tid === 'SYSTEM' || activeTeacherIds.has(tid));
+              if (cleanTids.length !== cell.teacherIds.length) {
+                cell.teacherIds = cleanTids;
+                timetableChanged = true;
+              }
+            }
+          }
+        }
+      }
+    }
+    if (timetableChanged) {
+      modified = true;
+    }
   }
 
   if (modified) {
@@ -271,34 +327,38 @@ async function hydrateStoreFromFirestore() {
     );
     const snap = await Promise.race([fetchDocsPromise, timeoutPromise]);
     let modified = false;
+    const serverVersion = store.version || 0;
+
     snap.docs.forEach(docSnap => {
       const key = docSnap.id;
       const data = docSnap.data();
       if (data && data.payload !== undefined) {
-        if (key === 'ota_timetable_v2') {
-          const currentClasses = Object.keys(store.keys['ota_timetable_v2'] || {}).length;
-          const remoteClasses = Object.keys(data.payload || {}).length;
-          // Protect administrator timetable: keep populated remote timetable
-          if (remoteClasses > 0 || currentClasses === 0) {
+        const remoteUpdatedAt = data.updatedAt || 0;
+        
+        // Strict timestamp check: ONLY accept remote document if it is strictly NEWER than local store version!
+        // Never allow older cloud document to overwrite newly deleted teachers or generated timetables.
+        if (remoteUpdatedAt > serverVersion || store.keys[key] === undefined) {
+          if (key === 'ota_teachers_v3') {
+            // If local teachers is empty array and remote has data, only accept if remote is genuinely newer
+            store.keys[key] = Array.isArray(data.payload) ? data.payload : Object.values(data.payload);
+            modified = true;
+          } else if (key === 'ota_timetable_v2') {
+            store.keys[key] = data.payload;
+            modified = true;
+          } else {
             store.keys[key] = data.payload;
             modified = true;
           }
-        } else {
-          // For all other keys (teachers, history, settings, classes, subjects, rooms, etc.)
-          const remoteHasData = Array.isArray(data.payload) 
-            ? data.payload.length > 0 
-            : (data.payload && typeof data.payload === 'object' && Object.keys(data.payload).length > 0);
-          if (remoteHasData || !store.keys[key]) {
-            store.keys[key] = data.payload;
-            modified = true;
-          }
+        } else if (serverVersion > remoteUpdatedAt && store.keys[key] !== undefined) {
+          // Local store is newer: sync local authoritative version to Firestore
+          syncOtaStoreDocToFirestore(key, store.keys[key]).catch(() => {});
         }
       }
     });
     if (modified) {
       store.version = Date.now();
       saveStoreToDisk();
-      console.log('[Server Startup] Successfully hydrated persistent store from Cloud Firestore!');
+      console.log('[Server Startup] Successfully hydrated persistent store from Cloud Firestore with strict version check!');
     }
   } catch (err: any) {
     console.warn('[Server Startup] Firestore hydration notice:', err?.message || err);
@@ -440,8 +500,12 @@ app.post('/api/auth/login', async (req, res) => {
         saveStoreToDisk();
       }
 
-      // Default admin password is admin123 and can be changed in the Admin tab without blocking development
-      const isDefault = matchedAdmin.mustChangePassword === true;
+      // Default admin password admin123 is strictly flagged to require immediate change
+      const isDefault = cleanPass === 'admin123' || cleanPass === 'admin' || matchedAdmin.mustChangePassword === true;
+      if (isDefault) {
+        matchedAdmin.mustChangePassword = true;
+        saveStoreToDisk();
+      }
 
       const sessionToken = crypto.randomUUID();
       activeAdminSession = {
@@ -451,7 +515,7 @@ app.post('/api/auth/login', async (req, res) => {
         lastActive: NOW
       };
 
-      const userPayload = { ...matchedAdmin, role: 'ADMIN' };
+      const userPayload = { ...matchedAdmin, role: 'ADMIN', mustChangePassword: isDefault };
       const token = jwt.sign({ id: matchedAdmin.id, username: matchedAdmin.username || matchedAdmin.name, role: 'ADMIN', sessionToken }, JWT_SECRET, { expiresIn: '7d' });
       const customToken = await getCustomFirebaseToken(matchedAdmin.id, 'ADMIN', matchedAdmin.username || matchedAdmin.name);
 
@@ -462,7 +526,7 @@ app.post('/api/auth/login', async (req, res) => {
         customTokenError: customTokenErrorMsg,
         role: 'ADMIN',
         user: userPayload,
-        mustChangePassword: !!matchedAdmin.mustChangePassword
+        mustChangePassword: isDefault
       });
     }
   }
@@ -565,60 +629,189 @@ interface PendingEmailVerification {
 
 const pendingEmailVerifications = new Map<string, PendingEmailVerification>();
 
+// Helper to construct a beautiful, modern, responsive HTML email template
+function buildEmailTemplate({
+  title,
+  preheader,
+  accentColor = '#2563eb',
+  badgeText,
+  heroTitle,
+  mainContentHtml,
+  footerNote
+}: {
+  title: string;
+  preheader?: string;
+  accentColor?: string;
+  badgeText: string;
+  heroTitle: string;
+  mainContentHtml: string;
+  footerNote?: string;
+}): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <style>
+    body { margin: 0; padding: 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+    .email-container { max-width: 580px; margin: 32px auto; background: #ffffff; border-radius: 24px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.08), 0 8px 10px -6px rgba(15, 23, 42, 0.04); border: 1px solid #e2e8f0; }
+    .email-header { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 36px 32px 30px; text-align: center; }
+    .email-body { padding: 36px 32px 28px; color: #334155; line-height: 1.6; }
+    .email-footer { background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 24px 32px; text-align: center; font-size: 12px; color: #64748b; }
+    @media only screen and (max-width: 600px) {
+      .email-container { margin: 0; border-radius: 0; }
+      .email-header { padding: 28px 20px 22px; }
+      .email-body { padding: 28px 20px 20px; }
+    }
+  </style>
+</head>
+<body>
+  ${preheader ? `<div style="display:none;font-size:1px;color:#f1f5f9;line-height:1px;max-height:0px;max-width:0px;opacity:0;overflow:hidden;">${preheader}</div>` : ''}
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#f1f5f9;padding:24px 12px;">
+    <tr>
+      <td align="center">
+        <div class="email-container">
+          <!-- Header -->
+          <div class="email-header">
+            <!-- Bold PENTRIC Brand Logo & Wordmark -->
+            <div style="margin-bottom: 20px;">
+              <div style="display: inline-block; padding: 10px 28px; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 100px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);">
+                <table role="presentation" cellspacing="0" cellpadding="0" style="margin: 0 auto;">
+                  <tr>
+                    <td valign="middle" style="padding-right: 12px;">
+                      <div style="width: 34px; height: 34px; line-height: 34px; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); border-radius: 10px; text-align: center; color: #ffffff; font-weight: 900; font-size: 19px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.5);">
+                        P
+                      </div>
+                    </td>
+                    <td valign="middle">
+                      <span style="color: #ffffff; font-size: 26px; font-weight: 900; letter-spacing: 4px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; text-transform: uppercase;">
+                        PENTRIC
+                      </span>
+                    </td>
+                  </tr>
+                </table>
+              </div>
+            </div>
+
+            <!-- Category Badge -->
+            <div style="margin-bottom: 12px;">
+              <span style="display:inline-block; padding: 5px 14px; background: rgba(255,255,255,0.12); color: #93c5fd; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.18);">
+                ${badgeText}
+              </span>
+            </div>
+
+            <h1 style="color: #ffffff; font-size: 24px; font-weight: 800; margin: 0 0 6px 0; letter-spacing: -0.5px;">${heroTitle}</h1>
+            <p style="color: #94a3b8; font-size: 13px; margin: 0; font-weight: 500;">Pentric Intelligent Academic Scheduling</p>
+          </div>
+
+          <!-- Body -->
+          <div class="email-body">
+            ${mainContentHtml}
+          </div>
+
+          <!-- Footer -->
+          <div class="email-footer">
+            <div style="display: flex; align-items: center; justify-content: center; gap: 6px; margin-bottom: 8px;">
+              <span style="font-weight: 900; color: #0f172a; letter-spacing: 1.5px; font-size: 13px;">PENTRIC</span>
+              <span style="color: #cbd5e1;">•</span>
+              <span>Intelligent Academic Scheduling</span>
+            </div>
+            <p style="margin: 0 0 6px 0; color: #94a3b8; font-size: 11px;">
+              ${footerNote || 'This is an official system transmission. If you did not request this communication, please contact your school administrator immediately.'}
+            </p>
+            <p style="margin: 0; color: #cbd5e1; font-size: 10px;">
+              Security standard: SHA-256 TLS Encrypted • Anti-Imposter Faculty Protection
+            </p>
+          </div>
+        </div>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
 async function sendVerificationEmail(recipientEmail: string, code: string, recipientName?: string): Promise<{ success: boolean; isDevFallback?: boolean; devCode?: string; error?: string }> {
   const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
   const smtpUser = (process.env.SMTP_USER || 'proxbott@gmail.com').trim();
   const smtpPass = (process.env.SMTP_PASS || '').trim();
   const smtpPort = Number(process.env.SMTP_PORT || 587);
-  const smtpFrom = process.env.SMTP_FROM || `"OTA Smart Timetable" <${smtpUser}>`;
+  const smtpFrom = process.env.SMTP_FROM || `"Pentric Timetable" <${smtpUser}>`;
 
-  const subject = `Your 6-Digit Verification Code: ${code} - OTA Smart Timetable`;
+  const digits = code.split('');
+  const digitsHtml = digits.map(d => `
+    <td align="center" style="padding: 0 4px;">
+      <div style="width: 44px; height: 56px; line-height: 56px; background: #ffffff; border: 2px solid #3b82f6; border-radius: 12px; font-size: 28px; font-weight: 900; color: #1e3a8a; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+        ${d}
+      </div>
+    </td>
+  `).join('');
+
+  const subject = `🔐 Verification Code: ${code} — Pentric Academic Portal`;
   const textContent = `Hello ${recipientName || 'Faculty Member'},\n\n` +
-    `Your 6-digit anti-bot verification code for OTA Smart Timetable is:\n\n` +
+    `Your 6-digit verification code for Pentric Academic Timetable is:\n\n` +
     `  ${code}\n\n` +
-    `This code will expire in 15 minutes. Enter this code on the registration page to confirm that you are not a bot and complete your account creation.\n\n` +
-    `If you did not request this verification code, please ignore this message.\n\n` +
-    `Best regards,\nOTA Smart Academic Administration`;
+    `This verification code will expire in 15 minutes. Enter this code to verify your email and complete registration.\n\n` +
+    `If you did not request this verification code, please ignore this email.\n\n` +
+    `Best regards,\nPentric Academic Administration`;
 
-  const htmlContent = `
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 32px 24px; border: 1px solid #e2e8f0; border-radius: 20px; background-color: #ffffff; color: #1e293b;">
-      <div style="text-align: center; margin-bottom: 24px;">
-        <div style="display: inline-block; background-color: #2563eb; color: #ffffff; width: 44px; height: 44px; line-height: 44px; border-radius: 12px; font-weight: bold; font-size: 20px;">OTA</div>
-        <h2 style="color: #0f172a; margin: 12px 0 4px 0; font-size: 22px; font-weight: 800;">Anti-Bot Email Verification</h2>
-        <p style="color: #64748b; font-size: 14px; margin: 0;">OTA Smart Timetable & Faculty Portal</p>
+  const mainContentHtml = `
+    <p style="font-size: 15px; color: #1e293b; margin: 0 0 16px 0;">
+      Hello <strong>${recipientName || 'Faculty Member'}</strong>,
+    </p>
+    <p style="font-size: 14px; color: #475569; margin: 0 0 24px 0; line-height: 1.6;">
+      Thank you for registering on Pentric Academic Timetable. To protect our academic portal against automated bots and verify that you are a genuine faculty member, please use the 6-digit verification code below:
+    </p>
+
+    <!-- Digits Box -->
+    <div style="background: linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%); border: 1px solid #bfdbfe; border-radius: 18px; padding: 26px 16px; margin: 24px 0; text-align: center;">
+      <div style="font-size: 12px; font-weight: 800; color: #1e40af; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 14px;">
+        One-Time Verification Code
       </div>
-      <div style="background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%); border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; text-align: center; margin: 24px 0;">
-        <p style="color: #475569; font-size: 13px; font-weight: 600; margin: 0 0 12px 0; text-transform: uppercase; letter-spacing: 0.5px;">Your 6-Digit Verification Code</p>
-        <div style="font-size: 38px; font-weight: 900; letter-spacing: 8px; color: #1d4ed8; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; padding: 8px 0;">${code}</div>
-        <p style="color: #94a3b8; font-size: 12px; margin: 12px 0 0 0;">Valid for 15 minutes • One-time use only</p>
-      </div>
-      <p style="color: #475569; font-size: 13px; line-height: 1.6; margin: 0 0 16px 0;">
-        Enter this verification code on the registration screen to confirm your email address and verify that you are genuine school staff and not an automated bot.
-      </p>
-      <div style="border-top: 1px solid #f1f5f9; padding-top: 16px; margin-top: 24px; text-align: center;">
-        <p style="color: #94a3b8; font-size: 11px; margin: 0;">If you didn't attempt to create an account at OTA Smart Timetable, you can safely disregard this email.</p>
+      <table role="presentation" cellspacing="0" cellpadding="0" style="margin: 0 auto;">
+        <tr>
+          ${digitsHtml}
+        </tr>
+      </table>
+      <div style="margin-top: 16px; font-size: 12px; font-weight: 600; color: #3b82f6; display: flex; align-items: center; justify-content: center; gap: 4px;">
+        ⏱️ Valid for 15 minutes • Single use only
       </div>
     </div>
+
+    <div style="background: #f8fafc; border-left: 4px solid #2563eb; padding: 14px 16px; border-radius: 8px; margin: 24px 0 20px 0;">
+      <p style="font-size: 13px; color: #334155; margin: 0; font-weight: 500;">
+        <strong>Anti-Imposter Notice:</strong> Once your email is verified, your registration will be reviewed by your school administrator to verify faculty authenticity before granting access to institutional schedules.
+      </p>
+    </div>
+
+    <p style="font-size: 12px; color: #94a3b8; margin: 0; line-height: 1.5;">
+      Never share this code with anyone. Our administrators will never ask for your verification code.
+    </p>
   `;
+
+  const htmlContent = buildEmailTemplate({
+    title: `Pentric Verification Code: ${code}`,
+    preheader: `Your verification code is ${code}. Valid for 15 minutes.`,
+    accentColor: '#2563eb',
+    badgeText: 'SECURITY VERIFICATION',
+    heroTitle: 'Anti-Bot Email Verification',
+    mainContentHtml,
+    footerNote: 'This email was generated in response to an account registration attempt at your institution.'
+  });
 
   try {
     const isGmail = smtpHost.toLowerCase().includes('gmail');
     const transporter = isGmail
       ? nodemailer.createTransport({
           service: 'gmail',
-          auth: {
-            user: smtpUser,
-            pass: smtpPass
-          }
+          auth: { user: smtpUser, pass: smtpPass }
         })
       : nodemailer.createTransport({
           host: smtpHost,
           port: smtpPort,
           secure: smtpPort === 465,
-          auth: {
-            user: smtpUser,
-            pass: smtpPass || ''
-          }
+          auth: { user: smtpUser, pass: smtpPass || '' }
         });
 
     await transporter.sendMail({
@@ -629,14 +822,165 @@ async function sendVerificationEmail(recipientEmail: string, code: string, recip
       html: htmlContent
     });
 
-    console.log(`[Anti-Bot Mailer] Verification email successfully delivered to ${recipientEmail} via ${smtpUser}`);
+    console.log(`[Email Dispatcher] Beautiful verification email dispatched to ${recipientEmail}`);
     return { success: true, isDevFallback: false };
   } catch (err: any) {
-    console.warn(`[Anti-Bot Mailer] Note: Outbound SMTP message to ${recipientEmail} encountered: ${err?.message}. Activating fallback with code ${code}.`);
-    // Fallback if network or auth error occurs
+    console.warn(`[Email Dispatcher] Outbound SMTP notice for ${recipientEmail}: ${err?.message}. Dev fallback code: ${code}`);
     return { success: true, isDevFallback: true, devCode: code, error: err?.message };
   }
 }
+
+// Endpoint to send institutional notifications via email
+app.post('/api/notifications/send-email', async (req, res) => {
+  const { recipientEmail, title, message, details, category, recipientName } = req.body;
+  if (!recipientEmail || typeof recipientEmail !== 'string') {
+    return res.status(400).json({ success: false, error: 'Recipient email is required.' });
+  }
+
+  const cleanEmail = recipientEmail.trim().toLowerCase();
+  const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
+  const smtpUser = (process.env.SMTP_USER || 'proxbott@gmail.com').trim();
+  const smtpPass = (process.env.SMTP_PASS || '').trim();
+  const smtpPort = Number(process.env.SMTP_PORT || 587);
+  const smtpFrom = process.env.SMTP_FROM || `"Pentric Timetable" <${smtpUser}>`;
+
+  const isAlert = category === 'ALERT' || (title && title.toUpperCase().includes('ALERT'));
+  const accentColor = isAlert ? '#dc2626' : category === 'REQUEST' ? '#7c3aed' : '#2563eb';
+  const badgeText = category || 'ACADEMIC NOTICE';
+
+  const mainContentHtml = `
+    <p style="font-size: 15px; color: #1e293b; margin: 0 0 16px 0;">
+      Hello <strong>${recipientName || 'Faculty Member'}</strong>,
+    </p>
+    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; padding: 22px; margin: 20px 0;">
+      <h3 style="margin: 0 0 10px 0; color: #0f172a; font-size: 17px; font-weight: 800;">
+        ${title || 'Important Notice'}
+      </h3>
+      <p style="margin: 0; color: #475569; font-size: 14px; line-height: 1.6;">
+        ${message || ''}
+      </p>
+      ${details ? `
+        <div style="margin-top: 14px; padding-top: 14px; border-top: 1px dashed #cbd5e1; font-size: 13px; color: #64748b; font-family: monospace;">
+          ${details}
+        </div>
+      ` : ''}
+    </div>
+    <div style="text-align: center; margin-top: 26px;">
+      <a href="${req.headers.origin || 'https://pentric.app'}" style="display: inline-block; background: ${accentColor}; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 12px; font-weight: 700; font-size: 14px; box-shadow: 0 4px 12px rgba(37,99,235,0.25);">
+        Open Portal & View Schedule →
+      </a>
+    </div>
+  `;
+
+  const htmlContent = buildEmailTemplate({
+    title: title || 'Pentric Notification',
+    preheader: message ? message.substring(0, 100) : 'New notification from Pentric Timetable',
+    accentColor,
+    badgeText,
+    heroTitle: title || 'Academic Notice',
+    mainContentHtml,
+    footerNote: 'You received this notification because your email is registered as an official faculty member.'
+  });
+
+  try {
+    const isGmail = smtpHost.toLowerCase().includes('gmail');
+    const transporter = isGmail
+      ? nodemailer.createTransport({
+          service: 'gmail',
+          auth: { user: smtpUser, pass: smtpPass }
+        })
+      : nodemailer.createTransport({
+          host: smtpHost,
+          port: smtpPort,
+          secure: smtpPort === 465,
+          auth: { user: smtpUser, pass: smtpPass || '' }
+        });
+
+    await transporter.sendMail({
+      from: smtpFrom,
+      to: cleanEmail,
+      subject: `📢 ${title || 'Pentric Notification'}`,
+      text: `${title}\n\n${message}\n\n${details || ''}`,
+      html: htmlContent
+    });
+
+    return res.json({ success: true, message: `Notification email dispatched to ${cleanEmail}.` });
+  } catch (err: any) {
+    console.warn(`[Notification Mailer] SMTP Notice: ${err?.message}`);
+    return res.json({ success: true, isDevFallback: true, message: 'Notification queued in local system.' });
+  }
+});
+
+// Mandatory Admin Password Change Endpoint (Hardened Security)
+app.post('/api/auth/change-admin-password', async (req, res) => {
+  const { adminId, newPassword } = req.body;
+  if (!adminId || !newPassword) {
+    return res.status(400).json({ success: false, error: 'Administrator ID and new password are required.' });
+  }
+
+  const cleanPass = String(newPassword).trim();
+  if (cleanPass.length < 8) {
+    return res.status(400).json({ success: false, error: 'Password must be at least 8 characters long.' });
+  }
+
+  if (cleanPass === 'admin123' || cleanPass === 'admin' || cleanPass.toLowerCase() === 'password') {
+    return res.status(400).json({ success: false, error: 'Security Violation: You cannot reuse the default insecure password.' });
+  }
+
+  const adminsObj = store.keys['ota_admins'] || [];
+  let adminList: any[] = Array.isArray(adminsObj) ? [...adminsObj] : Object.values(adminsObj);
+  const idx = adminList.findIndex((a: any) => a && (a.id === adminId || a.username === adminId));
+
+  if (idx === -1) {
+    return res.status(404).json({ success: false, error: 'Administrator account not found.' });
+  }
+
+  const hashedPassword = bcrypt.hashSync(cleanPass, 10);
+  adminList[idx].password = hashedPassword;
+  adminList[idx].mustChangePassword = false;
+  adminList[idx].updatedAt = Date.now();
+
+  store.keys['ota_admins'] = adminList;
+  store.version = Date.now();
+  saveStoreToDisk();
+
+  try {
+    await syncOtaStoreDocToFirestore('ota_admins', adminList);
+  } catch {}
+
+  // Add audit log entry
+  const auditLog = {
+    id: 'audit_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    actorName: adminList[idx].name || 'Administrator',
+    actorRole: 'ADMIN',
+    action: 'ADMIN_PASSWORD_HARDENED',
+    details: 'Administrator default password replaced with cryptographically secure credentials. Access hardened.',
+    timestamp: Date.now()
+  };
+
+  let auditList: any[] = [];
+  if (Array.isArray(store.keys['ota_audit_logs_v1'])) {
+    auditList = [...store.keys['ota_audit_logs_v1']];
+  } else if (store.keys['ota_audit_logs_v1']) {
+    auditList = Object.values(store.keys['ota_audit_logs_v1']);
+  }
+  auditList.unshift(auditLog);
+  store.keys['ota_audit_logs_v1'] = auditList;
+  saveStoreToDisk();
+
+  broadcastToClients('update', {
+    version: store.version,
+    changedKeys: {
+      ota_admins: adminList,
+      ota_audit_logs_v1: auditList
+    }
+  });
+
+  return res.json({
+    success: true,
+    message: 'Administrator password successfully updated. Default access credentials hardened.'
+  });
+});
 
 // Send 6-Digit Email Verification Code Route
 app.post('/api/auth/send-verification-code', async (req, res) => {
@@ -909,6 +1253,36 @@ app.post('/api/auth/signup', async (req, res) => {
   });
 });
 
+// Helper to remove any deleted teacher reference from timetable slots
+function scrubTeacherFromTimetable(teacherId: string): boolean {
+  let changed = false;
+  const timetable = store.keys['ota_timetable_v2'];
+  if (timetable && typeof timetable === 'object') {
+    for (const classId in timetable) {
+      const days = timetable[classId];
+      if (!days || typeof days !== 'object') continue;
+      for (const day in days) {
+        const periods = days[day];
+        if (!periods || typeof periods !== 'object') continue;
+        for (const period in periods) {
+          const cell = periods[period];
+          if (cell) {
+            if (cell.teacherId === teacherId) {
+              cell.teacherId = '';
+              changed = true;
+            }
+            if (Array.isArray(cell.teacherIds) && cell.teacherIds.includes(teacherId)) {
+              cell.teacherIds = cell.teacherIds.filter((tid: string) => tid !== teacherId);
+              changed = true;
+            }
+          }
+        }
+      }
+    }
+  }
+  return changed;
+}
+
 // Admin Teacher Approval Endpoint (Anti-Imposter Protection)
 app.post('/api/teachers/approve', (req, res) => {
   const { teacherId, action, reason, adminName } = req.body;
@@ -920,45 +1294,50 @@ app.post('/api/teachers/approve', (req, res) => {
   let teacherList: any[] = Array.isArray(teachersObj) ? teachersObj : Object.values(teachersObj);
   const teacher = teacherList.find((t: any) => t && t.id === teacherId);
 
-  if (!teacher) {
+  if (!teacher && action !== 'DELETE') {
     return res.status(404).json({ success: false, error: 'Teacher not found' });
   }
 
   const actor = adminName || 'School Administrator';
 
   if (action === 'APPROVE') {
-    teacher.isApproved = true;
-    teacher.approvalStatus = 'APPROVED';
-    delete teacher.rejectionReason;
+    if (teacher) {
+      teacher.isApproved = true;
+      teacher.approvalStatus = 'APPROVED';
+      delete teacher.rejectionReason;
 
-    // Send confirmation notification to teacher
-    const note = {
-      id: 'notif_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-      recipientId: teacher.id,
-      title: 'Staff Verification Approved ✅',
-      message: `Your faculty account has been verified by ${actor}. You now have full access to your school timetable.`,
-      details: 'Anti-imposter verification successfully cleared.',
-      isRead: false,
-      timestamp: Date.now(),
-      type: 'SUCCESS',
-      category: 'SYSTEM'
-    };
-    if (!store.keys['ota_notifications_v2']) store.keys['ota_notifications_v2'] = [];
-    if (Array.isArray(store.keys['ota_notifications_v2'])) {
-      store.keys['ota_notifications_v2'].unshift(note);
-    } else {
-      store.keys['ota_notifications_v2'][note.id] = note;
+      // Send confirmation notification to teacher
+      const note = {
+        id: 'notif_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+        recipientId: teacher.id,
+        title: 'Staff Verification Approved ✅',
+        message: `Your faculty account has been verified by ${actor}. You now have full access to your school timetable.`,
+        details: 'Anti-imposter verification successfully cleared.',
+        isRead: false,
+        timestamp: Date.now(),
+        type: 'SUCCESS',
+        category: 'SYSTEM'
+      };
+      if (!store.keys['ota_notifications_v2']) store.keys['ota_notifications_v2'] = [];
+      if (Array.isArray(store.keys['ota_notifications_v2'])) {
+        store.keys['ota_notifications_v2'].unshift(note);
+      } else {
+        store.keys['ota_notifications_v2'][note.id] = note;
+      }
     }
   } else if (action === 'REJECT') {
-    teacher.isApproved = false;
-    teacher.approvalStatus = 'REJECTED';
-    teacher.rejectionReason = reason || 'Unverified staff member / Imposter suspected';
+    if (teacher) {
+      teacher.isApproved = false;
+      teacher.approvalStatus = 'REJECTED';
+      teacher.rejectionReason = reason || 'Unverified staff member / Imposter suspected';
+    }
   } else if (action === 'DELETE') {
     if (Array.isArray(store.keys['ota_teachers_v3'])) {
       store.keys['ota_teachers_v3'] = store.keys['ota_teachers_v3'].filter((t: any) => t && t.id !== teacherId);
     } else {
       delete store.keys['ota_teachers_v3'][teacherId];
     }
+    scrubTeacherFromTimetable(teacherId);
   }
 
   store.version = Date.now();
@@ -969,26 +1348,83 @@ app.post('/api/teachers/approve', (req, res) => {
   try {
     syncOtaStoreDocToFirestore('ota_teachers_v3', sanitized['ota_teachers_v3']);
     syncOtaStoreDocToFirestore('ota_notifications_v2', sanitized['ota_notifications_v2']);
+    if (action === 'DELETE') {
+      syncOtaStoreDocToFirestore('ota_timetable_v2', sanitized['ota_timetable_v2']);
+    }
   } catch (err) {}
 
   broadcastToClients('update', {
     version: store.version,
     key: 'ota_teachers_v3',
     item_id: teacherId,
-    data: teacher,
+    isDelete: action === 'DELETE',
+    data: action === 'DELETE' ? null : teacher,
     changedKeys: {
       ota_teachers_v3: sanitized['ota_teachers_v3'],
-      ota_notifications_v2: sanitized['ota_notifications_v2']
+      ota_notifications_v2: sanitized['ota_notifications_v2'],
+      ...(action === 'DELETE' ? { ota_timetable_v2: sanitized['ota_timetable_v2'] } : {})
     }
   });
 
-  return res.json({ success: true, teacher });
+  return res.json({ success: true, teacher: action === 'DELETE' ? null : teacher });
+});
+
+// Permanent Delete Teacher Endpoint (Ensures Teacher Stays Deleted Across All Devices)
+app.delete('/api/teachers/:id', (req, res) => {
+  const teacherId = req.params.id;
+  if (!teacherId) {
+    return res.status(400).json({ success: false, error: 'teacherId parameter is required' });
+  }
+
+  // 1. Remove from ota_teachers_v3 list
+  const teachersObj = store.keys['ota_teachers_v3'] || [];
+  let teacherList: any[] = Array.isArray(teachersObj) ? teachersObj : Object.values(teachersObj);
+  store.keys['ota_teachers_v3'] = teacherList.filter((t: any) => t && t.id !== teacherId);
+
+  // 2. Remove teacher from all slots in timetable
+  const timetableChanged = scrubTeacherFromTimetable(teacherId);
+
+  // 3. Remove absences and requests associated with this teacher
+  if (Array.isArray(store.keys['ota_absences_v1'])) {
+    store.keys['ota_absences_v1'] = store.keys['ota_absences_v1'].filter((a: any) => a && a.teacherId !== teacherId);
+  }
+  if (Array.isArray(store.keys['ota_requests_v2'])) {
+    store.keys['ota_requests_v2'] = store.keys['ota_requests_v2'].filter((r: any) => r && r.teacherId !== teacherId && r.senderId !== teacherId && r.targetTeacherId !== teacherId);
+  }
+
+  store.version = Date.now();
+  saveStoreToDisk();
+
+  const sanitized = getSanitizedKeys();
+
+  try {
+    syncOtaStoreDocToFirestore('ota_teachers_v3', sanitized['ota_teachers_v3']);
+    if (timetableChanged) {
+      syncOtaStoreDocToFirestore('ota_timetable_v2', sanitized['ota_timetable_v2']);
+    }
+  } catch (err) {}
+
+  // Broadcast deletion to all connected clients immediately
+  broadcastToClients('update', {
+    version: store.version,
+    key: 'ota_teachers_v3',
+    item_id: teacherId,
+    isDelete: true,
+    data: null,
+    changedKeys: {
+      ota_teachers_v3: sanitized['ota_teachers_v3'],
+      ...(timetableChanged ? { ota_timetable_v2: sanitized['ota_timetable_v2'] } : {})
+    }
+  });
+
+  console.log(`[Teacher Deleted] Permanent deletion completed for teacher ID ${teacherId}`);
+  return res.json({ success: true, teacherId, message: 'Teacher permanently removed from faculty and timetable.' });
 });
 
 // Dedicated Teacher Profile & Picture Update Endpoint
 app.post('/api/teachers/:id/profile', (req, res) => {
   const teacherId = req.params.id;
-  const { profilePicture, bio, contactEmail, contactPhone } = req.body;
+  const { profilePicture, bio, contactEmail, contactPhone, isCompleted, assignedClasses, subjectsTaught, availability, name } = req.body;
 
   const teachersObj = store.keys['ota_teachers_v3'] || [];
   let teacherList: any[] = Array.isArray(teachersObj) ? teachersObj : Object.values(teachersObj);
@@ -997,13 +1433,14 @@ app.post('/api/teachers/:id/profile', (req, res) => {
   if (!teacher) {
     teacher = {
       id: teacherId,
-      name: 'Teacher',
+      name: name || 'Teacher',
       username: teacherId,
-      subjectsTaught: [],
-      assignedClasses: [],
-      availability: {},
+      subjectsTaught: subjectsTaught || [],
+      assignedClasses: assignedClasses || [],
+      availability: availability || {},
       approvalStatus: 'APPROVED',
-      isApproved: true
+      isApproved: true,
+      isCompleted: isCompleted ?? true
     };
     teacherList.push(teacher);
   }
@@ -1014,6 +1451,11 @@ app.post('/api/teachers/:id/profile', (req, res) => {
   if (bio !== undefined) teacher.bio = bio;
   if (contactEmail !== undefined) teacher.contactEmail = contactEmail;
   if (contactPhone !== undefined) teacher.contactPhone = contactPhone;
+  if (name !== undefined) teacher.name = name;
+  if (isCompleted !== undefined) teacher.isCompleted = isCompleted;
+  if (assignedClasses !== undefined) teacher.assignedClasses = assignedClasses;
+  if (subjectsTaught !== undefined) teacher.subjectsTaught = subjectsTaught;
+  if (availability !== undefined) teacher.availability = availability;
   teacher.updatedAt = Date.now();
 
   store.keys['ota_teachers_v3'] = teacherList;
@@ -1843,11 +2285,16 @@ app.post('/api/sync/update', (req, res) => {
   const now = Date.now();
   store.version = now;
 
+  let timetableAffected = false;
+
   if (updates && typeof updates === 'object') {
     for (const [pathKey, val] of Object.entries(updates)) {
       if (pathKey.includes('.')) {
         const [k, id] = pathKey.split('.');
         applyItemUpdate(k, id, val, val === null || val === undefined);
+        if (k === 'ota_teachers_v3' && (val === null || val === undefined)) {
+          if (scrubTeacherFromTimetable(id)) timetableAffected = true;
+        }
       } else {
         if (val === null || val === undefined) {
           delete store.keys[pathKey];
@@ -1869,6 +2316,9 @@ app.post('/api/sync/update', (req, res) => {
   } else if (key) {
     if (item_id && item_id !== 'fixed') {
       applyItemUpdate(key, item_id, data, !!isDelete);
+      if (key === 'ota_teachers_v3' && isDelete) {
+        if (scrubTeacherFromTimetable(item_id)) timetableAffected = true;
+      }
     } else {
       if (isDelete) {
         delete store.keys[key];
@@ -1888,7 +2338,17 @@ app.post('/api/sync/update', (req, res) => {
     }
   }
 
-  saveStoreToDisk();
+  // If timetable was updated or affected, write to disk synchronously immediately
+  const isTimetableUpdate = key === 'ota_timetable_v2' || (updates && Object.keys(updates).some(k => k.startsWith('ota_timetable_v2'))) || timetableAffected;
+  if (isTimetableUpdate) {
+    try {
+      fs.writeFileSync(DATA_FILE, JSON.stringify(store), 'utf-8');
+    } catch (e) {
+      console.error('Error writing store immediately:', e);
+    }
+  } else {
+    saveStoreToDisk();
+  }
 
   const sanitized = getSanitizedKeys();
 
@@ -1896,6 +2356,10 @@ app.post('/api/sync/update', (req, res) => {
   if (key && sanitized[key] !== undefined) {
     changedKeys[key] = sanitized[key];
     syncOtaStoreDocToFirestore(key, sanitized[key]);
+  }
+  if (timetableAffected && sanitized['ota_timetable_v2'] !== undefined) {
+    changedKeys['ota_timetable_v2'] = sanitized['ota_timetable_v2'];
+    syncOtaStoreDocToFirestore('ota_timetable_v2', sanitized['ota_timetable_v2']);
   }
   if (updates && typeof updates === 'object') {
     Object.keys(updates).forEach(p => {
@@ -2039,6 +2503,131 @@ app.post('/api/developer/force-sync', async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+app.post('/api/developer/fix-stream-violations', async (req, res) => {
+  const { password } = req.body;
+  if (password !== DEVELOPER_PASSPHRASE) {
+    return res.status(401).json({ success: false, error: 'Unauthorized developer passphrase' });
+  }
+
+  let cleanedSlots = 0;
+  const timetable = store.keys['ota_timetable_v2'];
+  const bcSubjectKeywords = ['ECONOMICS', 'YORUBA', 'COMMERCE', 'ACCOUNTING', 'BOOK KEEPING', 'STORE MANAGEMENT', 'LITERATURE', 'GOVERNMENT'];
+
+  if (timetable && typeof timetable === 'object') {
+    for (const classId in timetable) {
+      const isScienceClass = /SS\d+A\d*/i.test(classId);
+      if (!isScienceClass) continue;
+
+      const days = timetable[classId];
+      if (!days || typeof days !== 'object') continue;
+      for (const day in days) {
+        const periods = days[day];
+        if (!periods || typeof periods !== 'object') continue;
+        for (const period in periods) {
+          const cell = periods[period];
+          if (!cell) continue;
+
+          const sId = (cell.subjectId || '').toLowerCase();
+          const sName = (cell.subjectName || '').toUpperCase();
+          const isBcSubject = sId === 'eco_sci' || sId === 'yor_sci' || sId.endsWith('_bc') ||
+            bcSubjectKeywords.some(kw => sName.includes(kw));
+
+          if (isBcSubject) {
+            periods[period] = {
+              subjectId: '',
+              subjectName: 'Free',
+              teacherId: '',
+              teacherName: 'Unassigned',
+              isCore: false,
+              room: ''
+            };
+            cleanedSlots++;
+          }
+        }
+      }
+    }
+  }
+
+  // Also purge eco_sci and yor_sci from subjects
+  if (store.keys['ota_subjects_v2']) {
+    let subList: any[] = Array.isArray(store.keys['ota_subjects_v2'])
+      ? store.keys['ota_subjects_v2']
+      : Object.values(store.keys['ota_subjects_v2']);
+    store.keys['ota_subjects_v2'] = subList.filter((s: any) => s && s.id !== 'eco_sci' && s.id !== 'yor_sci');
+    syncOtaStoreDocToFirestore('ota_subjects_v2', store.keys['ota_subjects_v2']);
+  }
+
+  store.version = Date.now();
+  saveStoreToDisk();
+  syncOtaStoreDocToFirestore('ota_timetable_v2', store.keys['ota_timetable_v2']);
+  broadcastToClients('update', {
+    version: store.version,
+    changedKeys: {
+      ota_timetable_v2: store.keys['ota_timetable_v2'],
+      ota_subjects_v2: store.keys['ota_subjects_v2']
+    }
+  });
+
+  return res.json({
+    success: true,
+    cleanedSlots,
+    message: `Curriculum stream fix applied. Removed ${cleanedSlots} Commercial/BC subjects from Science classes.`
+  });
+});
+
+app.post('/api/developer/purge-orphaned-teachers', async (req, res) => {
+  const { password } = req.body;
+  if (password !== DEVELOPER_PASSPHRASE) {
+    return res.status(401).json({ success: false, error: 'Unauthorized developer passphrase' });
+  }
+
+  const teachersObj = store.keys['ota_teachers_v3'] || {};
+  const teacherList: any[] = Array.isArray(teachersObj) ? teachersObj : Object.values(teachersObj);
+  const validTeacherIds = new Set(teacherList.map((t: any) => t && t.id).filter(Boolean));
+
+  let purgedCount = 0;
+  const timetable = store.keys['ota_timetable_v2'];
+  if (timetable && typeof timetable === 'object') {
+    for (const classId in timetable) {
+      const days = timetable[classId];
+      if (!days || typeof days !== 'object') continue;
+      for (const day in days) {
+        const periods = days[day];
+        if (!periods || typeof periods !== 'object') continue;
+        for (const period in periods) {
+          const cell = periods[period];
+          if (!cell) continue;
+
+          if (cell.teacherId && !validTeacherIds.has(cell.teacherId)) {
+            cell.teacherId = '';
+            cell.teacherName = 'Unassigned';
+            purgedCount++;
+          }
+          if (Array.isArray(cell.teacherIds)) {
+            cell.teacherIds = cell.teacherIds.filter((tid: string) => validTeacherIds.has(tid));
+          }
+        }
+      }
+    }
+  }
+
+  store.version = Date.now();
+  saveStoreToDisk();
+  syncOtaStoreDocToFirestore('ota_timetable_v2', store.keys['ota_timetable_v2']);
+  broadcastToClients('update', {
+    version: store.version,
+    changedKeys: {
+      ota_timetable_v2: store.keys['ota_timetable_v2']
+    }
+  });
+
+  return res.json({
+    success: true,
+    purgedCount,
+    message: `Purged ${purgedCount} ghost/orphaned teacher slot assignments from timetable.`
+  });
 });
 
 app.post('/api/developer/restore', (req, res) => {

@@ -1,10 +1,10 @@
 import { Teacher, TimetableGrid, Class, Subject, LogEntry, GeneratorConfig, Conflict, ReasoningReport, OptimizationGoal } from '../types';
-import { DAYS } from '../constants';
+import { DAYS, TIMETABLE_CONFIG } from '../constants';
 import { ConstraintSolver } from './constraint_solver';
-import { getEligibleSubjectsForClass, isSubjectEligibleForClass } from './curriculum_eligibility';
+import { getEligibleSubjectsForClass, isSubjectEligibleForClass, resolveMaxPerDay } from './curriculum_eligibility';
 
-const MAX_PERIODS = 8;
-const DAYS_COUNT = 5;
+const MAX_PERIODS = TIMETABLE_CONFIG.PERIODS_PER_DAY;
+const DAYS_COUNT = TIMETABLE_CONFIG.DAYS_COUNT;
 
 const evaluateAttemptQuality = (
     grid: TimetableGrid,
@@ -39,9 +39,16 @@ const evaluateAttemptQuality = (
         }
     }
 
-    const errorPenalty = validation.errors.length * 1000 + excessLessons * 2000;
+    // Strict candidate ranking hierarchy:
+    // 1. Zero hard constraint violations outranks any solution with violations.
+    // 2. Excess lessons penalized heavily (must equal 0).
+    // 3. Completed valid lessons without exceeding frequency.
+    // 4. Soft variety / preference score.
+    const hardErrorPenalty = validation.errors.length * 100000;
+    const excessPenalty = excessLessons * 50000;
+    const completionScore = completedLessons * 500;
     const reportScoreBonus = report?.score || 0;
-    return (completedLessons * 100) - errorPenalty + reportScoreBonus;
+    return completionScore - hardErrorPenalty - excessPenalty + reportScoreBonus;
 };
 
 export const generateTimetable = async (
@@ -60,6 +67,43 @@ export const generateTimetable = async (
 
     addLog('info', `Initializing Intelligent Constraint Solver (Goal: ${goal})...`);
 
+    // --- Curriculum Feasibility Preflight ---
+    const capacitySlots = TIMETABLE_CONFIG.INSTRUCTIONAL_SLOTS;
+    const overallocatedClasses: { name: string; configured: number; excess: number; subjects: string[] }[] = [];
+    const underallocatedClasses: { name: string; configured: number; short: number }[] = [];
+
+    for (const classObj of classes) {
+        const eligibleSubs = getEligibleSubjectsForClass(classObj, subjects);
+        const configuredSum = eligibleSubs.reduce((acc, s) => acc + (s.defaultPeriodCount || s.periodsPerWeek || 3), 0);
+        if (configuredSum > capacitySlots) {
+            overallocatedClasses.push({
+                name: classObj.name,
+                configured: configuredSum,
+                excess: configuredSum - capacitySlots,
+                subjects: eligibleSubs.map(s => `${s.name} (${s.defaultPeriodCount || s.periodsPerWeek || 3})`)
+            });
+        } else if (configuredSum < capacitySlots) {
+            underallocatedClasses.push({
+                name: classObj.name,
+                configured: configuredSum,
+                short: capacitySlots - configuredSum
+            });
+        }
+    }
+
+    if (overallocatedClasses.length > 0) {
+        const classNames = overallocatedClasses.map(c => c.name).join(', ');
+        addLog('warning', `Curriculum Capacity Alert: ${overallocatedClasses.length} class(es) (${classNames}) have configured weekly periods exceeding the ${capacitySlots} instructional teaching slots.`);
+        overallocatedClasses.forEach(c => {
+            addLog('info', `Structural Conflict: ${c.name} has ${c.configured} configured periods (${c.excess} excess). Full schedule requires administrator curriculum reduction.`);
+        });
+    }
+
+    const isClassLayoutOnly = !!config.classLayoutOnly || (!teachers || teachers.length === 0);
+    if (isClassLayoutOnly) {
+        addLog('info', 'Class-Layout-Only Draft: Class timetable generated without faculty assignment. Teacher validation deferred.');
+    }
+
     const MAX_RETRIES = 3;
     let bestQuality = -Infinity;
     let bestGrid: TimetableGrid = {};
@@ -68,7 +112,8 @@ export const generateTimetable = async (
 
     const solverConfig: GeneratorConfig = {
         ...config,
-        goal
+        goal,
+        classLayoutOnly: isClassLayoutOnly
     };
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -93,7 +138,7 @@ export const generateTimetable = async (
 
         const result = await solver.solve();
         const currentReport = solver.getReasoningReport();
-        const validation = validateTimetable(result.grid, classes, subjects, teachers);
+        const validation = validateTimetable(result.grid, classes, subjects, teachers, isClassLayoutOnly);
 
         const quality = evaluateAttemptQuality(result.grid, classes, subjects, validation, currentReport);
         if (quality > bestQuality || attempt === 0) {
@@ -103,7 +148,7 @@ export const generateTimetable = async (
             bestValidation = validation;
         }
 
-        const isSuccess = result.success && validation.valid && validation.rule1Satisfied && (currentReport?.hardConstraintsSatisfied ?? true);
+        const isSuccess = result.success && validation.valid && validation.rule1Satisfied && (currentReport?.hardConstraintsSatisfied ?? true) && (overallocatedClasses.length === 0);
         if (isSuccess) {
             bestGrid = result.grid;
             bestReport = currentReport;
@@ -116,44 +161,85 @@ export const generateTimetable = async (
             onProgress(100, { type: 'success', message: 'Timetable generation complete!', timestamp: Date.now() });
             return { success: true, timetable: bestGrid, logs, reasoningReport: bestReport };
         } else {
-            addLog('warning', `Optimization pass ${attempt + 1} completed with score ${currentReport?.score || 0}/100. Noted ${validation.errors.length} constraint notices. Analyzing...`);
-            validation.errors.forEach(err => addLog('warning', err));
-            if (validation.warnings.length > 0) {
-                validation.warnings.forEach(warn => addLog('info', warn));
-            }
+            addLog('info', `Optimization pass ${attempt + 1} finished with score ${currentReport?.score || 0}/100 (${validation.errors.length} unresolved notices).`);
         }
     }
 
     addLog('warning', 'Solver completed optimization passes. Delivering best optimized timetable schedule with detailed constraint report.');
     if (!bestValidation) {
-        bestValidation = validateTimetable(bestGrid, classes, subjects, teachers);
+        bestValidation = validateTimetable(bestGrid, classes, subjects, teachers, isClassLayoutOnly);
     }
-    bestValidation.errors.forEach(err => addLog('error', `Unsatisfied Constraint: ${err}`));
-    bestValidation.warnings.forEach(warn => addLog('warning', warn));
+
+    // Deduplicate and group errors
+    const seenErrors = new Set<string>();
+    const facultyErrors: string[] = [];
+
+    bestValidation.errors.forEach(err => {
+        if (err.includes('Missing Faculty Data') || err.includes('Teacher Capacity Shortage')) {
+            facultyErrors.push(err);
+        } else if (!seenErrors.has(err)) {
+            seenErrors.add(err);
+            addLog('error', `Unsatisfied Constraint: ${err}`);
+        }
+    });
+
+    if (!isClassLayoutOnly && facultyErrors.length > 0) {
+        const uniqueFac = Array.from(new Set(facultyErrors));
+        uniqueFac.forEach(f => addLog('error', f));
+    }
+
+    if (bestValidation.warnings.length > 0) {
+        const seenWarns = new Set<string>();
+        bestValidation.warnings.forEach(warn => {
+            if (!seenWarns.has(warn)) {
+                seenWarns.add(warn);
+                addLog('warning', warn);
+            }
+        });
+    }
 
     if (bestReport && bestReport.bottlenecks.length > 0) {
-        bestReport.bottlenecks.forEach(b => addLog('error', `Bottleneck: ${b}`));
+        const seenBottlenecks = new Set<string>();
+        bestReport.bottlenecks.forEach(b => {
+            if (!seenBottlenecks.has(b) && !seenErrors.has(b)) {
+                seenBottlenecks.add(b);
+                addLog('error', `Bottleneck: ${b}`);
+            }
+        });
     }
-    return { success: false, timetable: bestGrid, logs, reasoningReport: bestReport };
+
+    const overallSuccess = bestValidation.valid && bestValidation.rule1Satisfied && (bestReport?.hardConstraintsSatisfied ?? true) && (overallocatedClasses.length === 0);
+    return { success: overallSuccess, timetable: bestGrid, logs, reasoningReport: bestReport };
 };
+
 
 export const validateTimetable = (
     grid: TimetableGrid, 
     classes: Class[], 
     subjects: Subject[],
-    teachers?: Teacher[]
+    teachers?: Teacher[],
+    classLayoutOnly: boolean = false
 ): { 
     valid: boolean; 
     errors: string[]; 
     warnings: string[];
     rule1Satisfied: boolean; 
-    freePeriodStats: Record<string, { eligible: number; scheduled: number; free: number; configured: number }> 
+    freePeriodStats: Record<string, { eligible: number; scheduled: number; free: number; configured: number }>;
+    unavoidableCurriculumDeficit: number;
+    avoidableUnplacedSlots: number;
 } => {
+    const isLayoutOnly = classLayoutOnly || !teachers || teachers.length === 0;
     const errors: string[] = [];
     const warnings: string[] = [];
     let rule1Satisfied = true;
+    let unavoidableCurriculumDeficitTotal = 0;
+    let avoidableUnplacedSlotsTotal = 0;
     const freePeriodStats: Record<string, { eligible: number; scheduled: number; free: number; configured: number }> = {};
-    const eligibleTeachingSlots = (DAYS_COUNT * MAX_PERIODS) - 2; // 38 slots (excluding Friday Worship P7 & P8)
+    const eligibleTeachingSlots = TIMETABLE_CONFIG.INSTRUCTIONAL_SLOTS; // 38 slots (excluding Friday Worship P7 & P8)
+
+    if (isLayoutOnly) {
+        warnings.push('Class-Layout-Only Draft: Class timetable generated without faculty assignment. Teacher validation deferred.');
+    }
 
     // Teacher slot usage for clash detection across classes
     const teacherSlotUsage: Record<string, string[]> = {};
@@ -239,7 +325,7 @@ export const validateTimetable = (
         for (let d = 0; d < DAYS_COUNT; d++) {
             for (const subId in dailyCounts[d]) {
                 const sub = classSubjects.find(s => s.id === subId);
-                const maxDaily = typeof sub?.maxPerDay === 'number' ? sub.maxPerDay : (sub && (sub.defaultPeriodCount || sub.periodsPerWeek || 3) >= 4 ? 2 : 1);
+                const maxDaily = sub ? resolveMaxPerDay(sub) : 2;
                 const count = dailyCounts[d][subId];
                 if (count > maxDaily) {
                     errors.push(`Rule 5 Violation: Subject ${sub?.name || subId} scheduled ${count} times on ${DAYS[d]} for ${classObj.name} (exceeds max ${maxDaily}/day).`);
@@ -247,14 +333,23 @@ export const validateTimetable = (
             }
         }
 
+        const classCapacityDeficit = Math.max(0, configuredWeeklyTotal - eligibleTeachingSlots);
+        const classAvoidableUnplaced = Math.max(0, Math.min(configuredWeeklyTotal, eligibleTeachingSlots) - scheduledTotal);
+        unavoidableCurriculumDeficitTotal += classCapacityDeficit;
+        avoidableUnplacedSlotsTotal += classAvoidableUnplaced;
+
         // Exact subject frequency check (Section 5):
         // For each subject: actual scheduled occurrences === configured weekly frequency
         for (const sub of classSubjects) {
             const req = requiredPerSubject[sub.id];
             const scheduled = scheduledSubCounts[sub.id] || 0;
             if (scheduled < req) {
-                rule1Satisfied = false;
-                errors.push(`Missing Lesson Error: Class ${classObj.name} scheduled ${scheduled} of ${req} configured weekly periods for ${sub.name} (missing ${req - scheduled} periods).`);
+                if (configuredWeeklyTotal > eligibleTeachingSlots && scheduledTotal >= eligibleTeachingSlots) {
+                    warnings.push(`Curriculum Capacity Deficit: Class ${classObj.name} has ${configuredWeeklyTotal} configured periods for 38 slots; ${sub.name} received ${scheduled}/${req} periods.`);
+                } else {
+                    rule1Satisfied = false;
+                    errors.push(`Missing Lesson Error: Class ${classObj.name} scheduled ${scheduled} of ${req} configured weekly periods for ${sub.name} (missing ${req - scheduled} periods).`);
+                }
             } else if (scheduled > req) {
                 rule1Satisfied = false;
                 errors.push(`Excess Lesson Error: Class ${classObj.name} scheduled ${scheduled} weekly periods for ${sub.name}, exceeding the configured frequency of ${req} (excess ${scheduled - req} periods).`);
@@ -274,13 +369,15 @@ export const validateTimetable = (
         }
     }
 
-    // Teacher clash detection across classes (Section 5, Section 10 test 7)
-    for (const [key, classNames] of Object.entries(teacherSlotUsage)) {
-        if (classNames.length > 1) {
-            const [tid, d, p] = key.split('-');
-            const teacherObj = teachers?.find(t => t.id === tid);
-            const teacherName = teacherObj?.name || tid;
-            errors.push(`Teacher Clash: Teacher ${teacherName} is scheduled to teach multiple classes simultaneously (${classNames.join(', ')}) on ${DAYS[parseInt(d)]} P${parseInt(p) + 1}.`);
+    // Teacher clash detection across classes (Section 5, Section 10 test 7) - only if NOT isLayoutOnly
+    if (!isLayoutOnly) {
+        for (const [key, classNames] of Object.entries(teacherSlotUsage)) {
+            if (classNames.length > 1) {
+                const [tid, d, p] = key.split('-');
+                const teacherObj = teachers?.find(t => t.id === tid);
+                const teacherName = teacherObj?.name || tid;
+                errors.push(`Teacher Clash: Teacher ${teacherName} is scheduled to teach multiple classes simultaneously (${classNames.join(', ')}) on ${DAYS[parseInt(d)]} P${parseInt(p) + 1}.`);
+            }
         }
     }
 
@@ -289,7 +386,9 @@ export const validateTimetable = (
         errors, 
         warnings, 
         rule1Satisfied, 
-        freePeriodStats 
+        freePeriodStats,
+        unavoidableCurriculumDeficit: unavoidableCurriculumDeficitTotal,
+        avoidableUnplacedSlots: avoidableUnplacedSlotsTotal
     };
 };
 

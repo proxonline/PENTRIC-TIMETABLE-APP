@@ -25,14 +25,12 @@ export const SSS_SCIENCE_SUBJECTS: Subject[] = [
   { id: 'math_sci', name: 'Mathematics', code: 'MATH', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: true, defaultPeriodCount: 5, periodsPerWeek: 5, maxPerDay: 2 },
   { id: 'eng_sci', name: 'English', code: 'ENGL', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: true, defaultPeriodCount: 5, periodsPerWeek: 5, maxPerDay: 2 },
   { id: 'civ_sci', name: 'Civic Education', code: 'CIVI', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: true, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
-  { id: 'phy_sci', name: 'Physics', code: 'PHYS', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: true, defaultPeriodCount: 4, periodsPerWeek: 4, maxPerDay: 2 },
-  { id: 'chem_sci', name: 'Chemistry', code: 'CHEM', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: true, defaultPeriodCount: 4, periodsPerWeek: 4, maxPerDay: 2 },
-  { id: 'bio_sci', name: 'Biology', code: 'BIOL', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: true, defaultPeriodCount: 4, periodsPerWeek: 4, maxPerDay: 2 },
+  { id: 'phy_sci', name: 'Physics', code: 'PHYS', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: true, defaultPeriodCount: 5, periodsPerWeek: 5, maxPerDay: 2 },
+  { id: 'chem_sci', name: 'Chemistry', code: 'CHEM', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: true, defaultPeriodCount: 5, periodsPerWeek: 5, maxPerDay: 2 },
+  { id: 'bio_sci', name: 'Biology', code: 'BIOL', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: true, defaultPeriodCount: 5, periodsPerWeek: 5, maxPerDay: 2 },
   { id: 'fur_sci', name: 'Further Maths / Agric', code: 'FURT', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: false, defaultPeriodCount: 4, periodsPerWeek: 4, maxPerDay: 1 },
-  { id: 'eco_sci', name: 'Economics', code: 'ECON', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: false, defaultPeriodCount: 3, periodsPerWeek: 3, maxPerDay: 1 },
-  { id: 'td_sci', name: 'Technical Drawing', code: 'TECH', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: false, defaultPeriodCount: 3, periodsPerWeek: 3, maxPerDay: 1 },
-  { id: 'dgt_sci', name: 'DGT', code: 'DGT', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: false, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
-  { id: 'yor_sci', name: 'Yoruba', code: 'YORU', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: false, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
+  { id: 'td_sci', name: 'Technical Drawing', code: 'TECH', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: false, defaultPeriodCount: 4, periodsPerWeek: 4, maxPerDay: 1 },
+  { id: 'dgt_sci', name: 'DGT', code: 'DGT', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE', isCore: false, defaultPeriodCount: 3, periodsPerWeek: 3, maxPerDay: 1 },
 ];
 
 export const SSS_BC_SUBJECTS: Subject[] = [
@@ -44,9 +42,10 @@ export const SSS_BC_SUBJECTS: Subject[] = [
   { id: 'acc_bc', name: 'Accounting', code: 'ACCO', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: true, defaultPeriodCount: 4, periodsPerWeek: 4, maxPerDay: 2 },
   { id: 'com_bc', name: 'Commerce', code: 'COMM', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: false, defaultPeriodCount: 3, periodsPerWeek: 3, maxPerDay: 1 },
   { id: 'gov_bc', name: 'Government', code: 'GOVE', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: false, defaultPeriodCount: 3, periodsPerWeek: 3, maxPerDay: 1 },
-  { id: 'dgt_bc', name: 'DGT', code: 'DGT', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: false, defaultPeriodCount: 3, periodsPerWeek: 3, maxPerDay: 1 },
-  { id: 'str_bc', name: 'Store Management', code: 'STOR', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: false, defaultPeriodCount: 3, periodsPerWeek: 3, maxPerDay: 1 },
+  { id: 'dgt_bc', name: 'DGT', code: 'DGT', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: false, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
+  { id: 'str_bc', name: 'Store Management', code: 'STOR', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: false, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
   { id: 'bk_bc', name: 'Book Keeping', code: 'BOOK', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: false, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
+  { id: 'yor_bc', name: 'Yoruba', code: 'YORU', category: 'SSS_BC', level: 'SENIOR', stream: 'BC', isCore: false, defaultPeriodCount: 2, periodsPerWeek: 2, maxPerDay: 1 },
 ];
 
 // Subjects where multiple teachers are assigned simultaneously to split the class
@@ -76,6 +75,16 @@ export const ALL_CLASSES: Class[] = [...jssClasses, ...sssSciClasses, ...sssBcCl
 
 // --- Time Structure ---
 
+export const TIMETABLE_CONFIG = {
+  DAYS_COUNT: 5,
+  PERIODS_PER_DAY: 8,
+  WORSHIP_DAY: 4, // Friday (0-indexed: Monday=0, Tuesday=1, Wednesday=2, Thursday=3, Friday=4)
+  WORSHIP_START_PERIOD: 6, // Index 6 (P7)
+  WORSHIP_PERIODS_COUNT: 2, // P7 & P8
+  TOTAL_GRID_SLOTS: 40,
+  INSTRUCTIONAL_SLOTS: 38 // 40 - 2
+} as const;
+
 export const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
 export const PERIODS = [
@@ -92,3 +101,4 @@ export const PERIODS = [
 ];
 
 export const BREAK_INDICES = [4, 7]; // Indices BEFORE which breaks occur (Logic handled in UI)
+

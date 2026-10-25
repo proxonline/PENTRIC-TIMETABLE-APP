@@ -267,9 +267,9 @@ const App = () => {
         return <PublicTimetable onBackToLogin={() => setShowPublicView(false)} />;
     }
     if (role === 'ADMIN') {
-        return <AdminDashboard onLogout={handleLogout} onSwitchSchool={handleSwitchSchool} />;
+        return <AdminDashboard onLogout={handleLogout} />;
     } else if (role === 'TEACHER') {
-        return <TeacherDashboard onLogout={handleLogout} onSwitchSchool={handleSwitchSchool} />;
+        return <TeacherDashboard onLogout={handleLogout} />;
     } else {
         return <Auth onLogin={setRole} onSelectPublicView={() => setShowPublicView(true)} onSwitchSchool={handleSwitchSchool} />;
     }

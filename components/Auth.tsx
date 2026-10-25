@@ -435,21 +435,15 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
             </div>
           )}
 
-          {/* Recovery Code Display */}
-          <div className="bg-slate-900 text-white p-5 rounded-2xl mb-6 relative group border border-slate-800">
-            <div className="text-3xl font-mono font-bold tracking-widest text-blue-400">{pendingVerification.recoveryCode}</div>
-            <div className="text-[10px] text-slate-400 mt-1 uppercase tracking-wider">Account Recovery Code (Keep Safe)</div>
-            <button 
-              type="button"
-              onClick={() => {
-                navigator.clipboard.writeText(pendingVerification.recoveryCode);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
-              }} 
-              className="absolute top-1/2 -translate-y-1/2 right-4 p-2 bg-white/10 rounded-lg hover:bg-white text-white hover:text-slate-900 transition-all"
-            >
-              {copied ? <CheckCircle size={16} /> : <Copy size={16} />}
-            </button>
+          {/* Secure Faculty Account Notice (Backup codes reserved for Developer Console only) */}
+          <div className="bg-slate-900 text-white p-5 rounded-2xl mb-6 relative group border border-slate-800 text-left">
+            <div className="flex items-center gap-2 mb-1.5 text-blue-400 font-bold text-xs uppercase tracking-wider">
+              <ShieldCheck size={16} />
+              <span>Institutional Faculty Escrow</span>
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Your staff credentials have been securely registered and hashed. Backup recovery keys are held strictly in the developer security console to prevent credential theft.
+            </p>
           </div>
 
           <div className="space-y-3">
@@ -490,7 +484,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
     );
   }
 
-  // --- COMPONENT: Success State ---
+  // --- COMPONENT: Success State (Code hidden from teachers) ---
   if (recoveryCodeDisplay) {
       return (
           <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans">
@@ -498,19 +492,11 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
                   <div className="w-20 h-20 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg shadow-emerald-100">
                       <CheckCircle size={40} />
                   </div>
-                  <h2 className="text-3xl font-bold text-slate-900 mb-3">Account Created</h2>
+                  <h2 className="text-3xl font-bold text-slate-900 mb-3">Account Ready</h2>
                   <p className="text-slate-500 text-sm mb-8 leading-relaxed">
-                      Your faculty account is ready. Please save your recovery code below. You will need it if you forget your password.
+                      Your faculty account has been registered successfully. Security verification is complete and your schedule is available in your portal.
                   </p>
                   
-                  <div className="bg-slate-900 text-white p-6 rounded-2xl mb-8 relative group shadow-xl">
-                      <div className="text-4xl font-mono font-bold tracking-widest">{recoveryCodeDisplay}</div>
-                      <div className="text-[10px] text-slate-400 mt-2 uppercase tracking-wider">Recovery Code</div>
-                      <button onClick={copyCode} className="absolute top-1/2 -translate-y-1/2 right-6 p-2 bg-white/10 rounded-lg hover:bg-white text-white hover:text-slate-900 transition-all">
-                          {copied ? <CheckCircle size={18} /> : <Copy size={18} />}
-                      </button>
-                  </div>
-
                   <button 
                     onClick={() => {
                       setRecoveryCodeDisplay(null);

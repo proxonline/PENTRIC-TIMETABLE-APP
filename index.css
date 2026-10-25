@@ -15,10 +15,9 @@ body {
   }
   body {
     background: white;
+    -webkit-print-color-adjust: exact; 
+    print-color-adjust: exact;
   }
-  /* Ensure background colors print */
-  -webkit-print-color-adjust: exact; 
-  print-color-adjust: exact;
 }
 
 .print-only {

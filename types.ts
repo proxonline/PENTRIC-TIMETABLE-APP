@@ -30,6 +30,7 @@ export interface GeneratorConfig {
   maxConsecutiveTeacherPeriods?: number;
   respectTeacherPreferences?: boolean;
   prioritizeCoreMorning?: boolean;
+  classLayoutOnly?: boolean;
 }
 
 export interface ClassAllocationSummary {
@@ -50,6 +51,9 @@ export interface ReasoningReport {
   totalSlotsRequired: number;
   totalCurriculumRequired?: number;
   totalAdditionalAllocated?: number;
+  unavoidableCurriculumDeficit?: number;
+  avoidableUnplacedSlots?: number;
+  isClassLayoutOnly?: boolean;
   classBreakdown?: Record<string, ClassAllocationSummary>;
   completionRate: number; // %
   teacherPreferenceSatisfactionRate: number; // %
