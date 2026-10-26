@@ -17,7 +17,6 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
   const [formData, setFormData] = useState({ name: '', username: '', email: '', password: '', recoveryCode: '', newPassword: '' });
   const [signupStep, setSignupStep] = useState<'DETAILS' | 'VERIFY_CODE'>('DETAILS');
   const [verificationCode, setVerificationCode] = useState('');
-  const [devCodeHint, setDevCodeHint] = useState<string | null>(null);
   const [resendCooldown, setResendCooldown] = useState(0);
   const [isSendingCode, setIsSendingCode] = useState(false);
   const [error, setError] = useState('');
@@ -82,7 +81,6 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
     setError('');
     setSignupStep('DETAILS');
     setVerificationCode('');
-    setDevCodeHint(null);
     setFormData({ name: '', username: '', email: '', password: '', recoveryCode: '', newPassword: '' });
   };
 
@@ -136,17 +134,8 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
 
       setSignupStep('VERIFY_CODE');
       setResendCooldown(30);
-      if (data.isDevFallback && data.devCode) {
-        setDevCodeHint(data.devCode);
-      } else {
-        setDevCodeHint(null);
-      }
-    } catch (e) {
-      // Local fallback for offline simulation
-      const fallbackCode = Math.floor(100000 + Math.random() * 900000).toString();
-      setDevCodeHint(fallbackCode);
-      setSignupStep('VERIFY_CODE');
-      setResendCooldown(30);
+    } catch (e: any) {
+      setError(e?.message || 'Network error: Failed to reach the verification service. Please try again.');
     } finally {
       setIsSendingCode(false);
     }
@@ -680,29 +669,6 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
                                 </div>
                             </div>
 
-                            {devCodeHint && (
-                                <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-900 space-y-1.5 shadow-xs">
-                                    <div className="flex items-center justify-between gap-2">
-                                        <div className="flex items-center gap-2">
-                                            <Sparkles size={16} className="text-amber-600 shrink-0" />
-                                            <div>
-                                                <span className="font-bold">Backup Code: </span>
-                                                <span className="font-mono font-black text-sm tracking-wider text-amber-950">{devCodeHint}</span>
-                                            </div>
-                                        </div>
-                                        <button
-                                            type="button"
-                                            onClick={() => setVerificationCode(devCodeHint)}
-                                            className="px-2.5 py-1 bg-amber-600 text-white text-[11px] font-bold rounded-lg hover:bg-amber-700 transition shadow-xs"
-                                        >
-                                            Auto-Fill
-                                        </button>
-                                    </div>
-                                    <div className="text-[11px] text-amber-800/90 leading-tight">
-                                        Sent via <strong>proxbott@gmail.com</strong>.
-                                    </div>
-                                </div>
-                            )}
 
                             <div className="relative group">
                                 <label className="block text-xs font-bold text-slate-600 mb-2 uppercase tracking-wider text-center">

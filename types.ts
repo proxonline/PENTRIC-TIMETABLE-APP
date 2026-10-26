@@ -278,6 +278,16 @@ export interface AuditLogEntry {
 
 export type TimetableGrid = Record<string, Record<number, Record<number, TimetableCell | null>>>;
 
+export interface TimetableMetadata {
+  revisionId: number;
+  publishedAt: number;
+  publishedBy: string;
+  status: 'PUBLISHED' | 'DRAFT';
+  term?: string;
+  session?: string;
+  checksum?: string;
+}
+
 export interface LogEntry {
   type: 'info' | 'success' | 'warning' | 'error';
   message: string;

@@ -39,6 +39,7 @@ export const PublicTimetable: React.FC<Props> = ({ onBackToLogin }) => {
   const [classes, setClasses] = useState<Class[]>([]);
   const [selectedClassId, setSelectedClassId] = useState<string>('');
   const [grid, setGrid] = useState<TGridType | null>(null);
+  const [meta, setMeta] = useState(() => storage.getTimetableMetadata());
   const [showQRModal, setShowQRModal] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -49,10 +50,12 @@ export const PublicTimetable: React.FC<Props> = ({ onBackToLogin }) => {
       setSelectedClassId(clsList[0].id);
     }
     setGrid(storage.getTimetable());
+    setMeta(storage.getTimetableMetadata());
 
     const unsub = storage.subscribe(() => {
       setGrid(storage.getTimetable());
       setClasses(storage.getClasses());
+      setMeta(storage.getTimetableMetadata());
     });
     return () => { unsub(); };
   }, []);
@@ -85,11 +88,15 @@ export const PublicTimetable: React.FC<Props> = ({ onBackToLogin }) => {
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2.5 flex-wrap">
               <School className="w-5 h-5 text-blue-600" />
               <h1 className="text-xl font-black text-slate-900 tracking-tight">{currentSchool.name}</h1>
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                Rev #{meta.revisionId}
+              </span>
             </div>
-            <p className="text-xs text-slate-500 font-medium">{currentSchool.name} Student & Parent Timetable Portal</p>
+            <p className="text-xs text-slate-500 font-medium">{currentSchool.name} Student & Parent Timetable Portal • Official Published Revision</p>
           </div>
         </div>
 

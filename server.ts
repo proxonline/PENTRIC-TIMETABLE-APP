@@ -34,6 +34,21 @@ app.use((req, res, next) => {
   next();
 });
 
+// Resilient Request Abort & Premature Socket Close Handling
+app.use((req, res, next) => {
+  let isAborted = false;
+  req.on('aborted', () => {
+    isAborted = true;
+  });
+  req.on('close', () => {
+    if (!res.writableEnded) {
+      isAborted = true;
+    }
+  });
+  (req as any).isAborted = () => isAborted;
+  next();
+});
+
 app.use(express.json({ limit: '25mb' }));
 
 // Persistent file storage directory
@@ -732,13 +747,104 @@ function buildEmailTemplate({
 </html>`;
 }
 
-async function sendVerificationEmail(recipientEmail: string, code: string, recipientName?: string): Promise<{ success: boolean; isDevFallback?: boolean; devCode?: string; error?: string }> {
+// --- SECURE OUTBOUND EMAIL INFRASTRUCTURE (RESEND HTTPS + BOUNDED SMTP) ---
+async function sendEmailMessage({
+  to,
+  subject,
+  html,
+  text,
+  fromName = 'Pentric Timetable'
+}: {
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+  fromName?: string;
+}): Promise<{ success: boolean; error?: string }> {
+  // 1. Resend API via HTTPS (Essential on hosting environments like Render that block SMTP ports)
+  const resendApiKey = (process.env.RESEND_API_KEY || '').trim();
+  if (resendApiKey) {
+    try {
+      const fromEmail = (process.env.RESEND_FROM || process.env.EMAIL_FROM || 'onboarding@resend.dev').trim();
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${resendApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          from: `${fromName} <${fromEmail}>`,
+          to: [to],
+          subject,
+          html,
+          text
+        }),
+        signal: AbortSignal.timeout(8000)
+      });
+      const data: any = await res.json().catch(() => ({}));
+      if (res.ok) {
+        console.log(`[Email Dispatcher] HTTPS email successfully delivered via Resend to ${to}`);
+        return { success: true };
+      } else {
+        const errorMsg = data?.message || `Resend API returned status ${res.status}`;
+        console.warn(`[Email Dispatcher] Resend API notice: ${errorMsg}`);
+      }
+    } catch (e: any) {
+      console.warn(`[Email Dispatcher] Resend dispatch notice: ${e?.message}`);
+    }
+  }
+
+  // 2. Bounded SMTP Transport Fallback (Strict 7s socket/connection timeout)
   const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
-  const smtpUser = (process.env.SMTP_USER || 'proxbott@gmail.com').trim();
+  const smtpUser = (process.env.SMTP_USER || '').trim();
   const smtpPass = (process.env.SMTP_PASS || '').trim();
   const smtpPort = Number(process.env.SMTP_PORT || 587);
-  const smtpFrom = process.env.SMTP_FROM || `"Pentric Timetable" <${smtpUser}>`;
+  const smtpFrom = process.env.SMTP_FROM || `"${fromName}" <${smtpUser || 'noreply@pentric.edu'}>`;
 
+  if (!smtpPass && !resendApiKey) {
+    return {
+      success: false,
+      error: 'Outbound email service is not configured. Please configure RESEND_API_KEY or SMTP credentials in environment variables.'
+    };
+  }
+
+  try {
+    const isGmail = smtpHost.toLowerCase().includes('gmail');
+    const transporter = isGmail
+      ? nodemailer.createTransport({
+          service: 'gmail',
+          auth: { user: smtpUser, pass: smtpPass },
+          connectionTimeout: 7000,
+          greetingTimeout: 7000,
+          socketTimeout: 7000
+        })
+      : nodemailer.createTransport({
+          host: smtpHost,
+          port: smtpPort,
+          secure: smtpPort === 465,
+          auth: { user: smtpUser, pass: smtpPass },
+          connectionTimeout: 7000,
+          greetingTimeout: 7000,
+          socketTimeout: 7000
+        });
+
+    await transporter.sendMail({
+      from: smtpFrom,
+      to,
+      subject,
+      text,
+      html
+    });
+
+    console.log(`[Email Dispatcher] Email dispatched via SMTP to ${to}`);
+    return { success: true };
+  } catch (err: any) {
+    console.warn(`[Email Dispatcher] Outbound SMTP notice for ${to}: ${err?.message}`);
+    return { success: false, error: err?.message || 'Outbound email delivery failed' };
+  }
+}
+
+async function sendVerificationEmail(recipientEmail: string, code: string, recipientName?: string): Promise<{ success: boolean; error?: string }> {
   const digits = code.split('');
   const digitsHtml = digits.map(d => `
     <td align="center" style="padding: 0 4px;">
@@ -800,34 +906,13 @@ async function sendVerificationEmail(recipientEmail: string, code: string, recip
     footerNote: 'This email was generated in response to an account registration attempt at your institution.'
   });
 
-  try {
-    const isGmail = smtpHost.toLowerCase().includes('gmail');
-    const transporter = isGmail
-      ? nodemailer.createTransport({
-          service: 'gmail',
-          auth: { user: smtpUser, pass: smtpPass }
-        })
-      : nodemailer.createTransport({
-          host: smtpHost,
-          port: smtpPort,
-          secure: smtpPort === 465,
-          auth: { user: smtpUser, pass: smtpPass || '' }
-        });
-
-    await transporter.sendMail({
-      from: smtpFrom,
-      to: recipientEmail,
-      subject,
-      text: textContent,
-      html: htmlContent
-    });
-
-    console.log(`[Email Dispatcher] Beautiful verification email dispatched to ${recipientEmail}`);
-    return { success: true, isDevFallback: false };
-  } catch (err: any) {
-    console.warn(`[Email Dispatcher] Outbound SMTP notice for ${recipientEmail}: ${err?.message}. Dev fallback code: ${code}`);
-    return { success: true, isDevFallback: true, devCode: code, error: err?.message };
-  }
+  return sendEmailMessage({
+    to: recipientEmail,
+    subject,
+    html: htmlContent,
+    text: textContent,
+    fromName: 'Pentric Verification'
+  });
 }
 
 // Endpoint to send institutional notifications via email
@@ -882,32 +967,18 @@ app.post('/api/notifications/send-email', async (req, res) => {
     footerNote: 'You received this notification because your email is registered as an official faculty member.'
   });
 
-  try {
-    const isGmail = smtpHost.toLowerCase().includes('gmail');
-    const transporter = isGmail
-      ? nodemailer.createTransport({
-          service: 'gmail',
-          auth: { user: smtpUser, pass: smtpPass }
-        })
-      : nodemailer.createTransport({
-          host: smtpHost,
-          port: smtpPort,
-          secure: smtpPort === 465,
-          auth: { user: smtpUser, pass: smtpPass || '' }
-        });
+  const mailResult = await sendEmailMessage({
+    to: cleanEmail,
+    subject: `📢 ${title || 'Pentric Notification'}`,
+    text: `${title}\n\n${message}\n\n${details || ''}`,
+    html: htmlContent,
+    fromName: 'Pentric Notification'
+  });
 
-    await transporter.sendMail({
-      from: smtpFrom,
-      to: cleanEmail,
-      subject: `📢 ${title || 'Pentric Notification'}`,
-      text: `${title}\n\n${message}\n\n${details || ''}`,
-      html: htmlContent
-    });
-
+  if (mailResult.success) {
     return res.json({ success: true, message: `Notification email dispatched to ${cleanEmail}.` });
-  } catch (err: any) {
-    console.warn(`[Notification Mailer] SMTP Notice: ${err?.message}`);
-    return res.json({ success: true, isDevFallback: true, message: 'Notification queued in local system.' });
+  } else {
+    return res.status(502).json({ success: false, error: mailResult.error || 'Failed to deliver notification email.' });
   }
 });
 
@@ -1019,8 +1090,7 @@ app.post('/api/auth/send-verification-code', async (req, res) => {
     const secondsLeft = Math.ceil((30000 - (now - existingRecord.lastSentAt)) / 1000);
     return res.status(429).json({ 
       success: false, 
-      error: `Please wait ${secondsLeft}s before requesting a new code.`,
-      devCode: existingRecord.code
+      error: `Please wait ${secondsLeft}s before requesting a new code.`
     });
   }
 
@@ -1037,12 +1107,16 @@ app.post('/api/auth/send-verification-code', async (req, res) => {
   });
 
   const mailResult = await sendVerificationEmail(cleanEmail, code, name);
+  if (!mailResult.success) {
+    return res.status(502).json({
+      success: false,
+      error: mailResult.error || 'Failed to deliver verification email. Please check your email address or try again.'
+    });
+  }
 
   return res.json({
     success: true,
-    message: `A 6-digit verification code has been sent to ${cleanEmail}.`,
-    isDevFallback: mailResult.isDevFallback,
-    devCode: mailResult.isDevFallback ? mailResult.devCode : undefined
+    message: `A 6-digit verification code has been sent to ${cleanEmail}.`
   });
 });
 

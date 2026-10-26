@@ -1,4 +1,4 @@
-import { Teacher, TimetableGrid, Availability, Subject, HistoryEntry, SwapRequest, AppNotification, AppSettings, ChatMessage, AdminUser, Class, Room, ExamSession, TeacherAbsence, AuditLogEntry, School, AcademicLevel, SlotBudgetInfo } from '../types';
+import { Teacher, TimetableGrid, Availability, Subject, HistoryEntry, SwapRequest, AppNotification, AppSettings, ChatMessage, AdminUser, Class, Room, ExamSession, TeacherAbsence, AuditLogEntry, School, AcademicLevel, SlotBudgetInfo, TimetableMetadata } from '../types';
 import { ALL_SUBJECTS, ALL_CLASSES } from '../constants';
 import { getSubjectStream, getClassStream } from './curriculum_eligibility';
 import bcrypt from 'bcryptjs';
@@ -7,6 +7,8 @@ import { db, doc, setDoc, deleteDoc, onSnapshot, collection, auth, signInAnonymo
 const KEYS = {
   TEACHERS: 'ota_teachers_v3',
   TIMETABLE: 'ota_timetable_v2',
+  TIMETABLE_DRAFT: 'ota_timetable_draft_v1',
+  TIMETABLE_METADATA: 'ota_timetable_metadata_v1',
   ADMIN_SESSION: 'ota_admin_session_id', 
   TEACHER_SESSION: 'ota_teacher_session',
   HISTORY: 'ota_history_v2',
@@ -33,6 +35,8 @@ const KEYS = {
 const SYNC_KEYS = [
   KEYS.TEACHERS,
   KEYS.TIMETABLE,
+  KEYS.TIMETABLE_DRAFT,
+  KEYS.TIMETABLE_METADATA,
   KEYS.HISTORY,
   KEYS.REQUESTS,
   KEYS.NOTIFICATIONS,
@@ -113,7 +117,7 @@ class CloudSync {
             // Immediately pull full state on new browser session/account
             this.fetchLatestFromApi(true).catch(() => {});
             this.initFirebaseSync();
-            this.startFast500msSyncLoop();
+            this.startFallbackSyncLoop();
             this.initSSESync();
         }
     }
@@ -158,7 +162,47 @@ class CloudSync {
                 let payload = keysData[k];
                 if (payload === undefined) return;
 
-                if (k === KEYS.TIMETABLE) {
+                if (k === KEYS.TIMETABLE_METADATA) {
+                    let parsedMeta: any = payload;
+                    if (typeof payload === 'string') {
+                        try { parsedMeta = JSON.parse(payload); } catch {}
+                    }
+                    if (parsedMeta && typeof parsedMeta.revisionId === 'number') {
+                        const currentMetaStr = localStorage.getItem(KEYS.TIMETABLE_METADATA);
+                        let currentRev = 0;
+                        if (currentMetaStr) {
+                            try {
+                                const parsedCur = JSON.parse(currentMetaStr);
+                                if (parsedCur && typeof parsedCur.revisionId === 'number') {
+                                    currentRev = parsedCur.revisionId;
+                                }
+                            } catch {}
+                        }
+                        if (parsedMeta.revisionId >= currentRev) {
+                            const valStr = JSON.stringify(parsedMeta);
+                            if (valStr !== currentMetaStr) {
+                                localStorage.setItem(k, valStr);
+                                changed = true;
+                            }
+                        }
+                    }
+                } else if (k === KEYS.TIMETABLE) {
+                    // Check if incoming payload is paired with an older revision metadata
+                    if (keysData[KEYS.TIMETABLE_METADATA]) {
+                        let incMeta = keysData[KEYS.TIMETABLE_METADATA];
+                        if (typeof incMeta === 'string') {
+                            try { incMeta = JSON.parse(incMeta); } catch {}
+                        }
+                        const curMetaStr = localStorage.getItem(KEYS.TIMETABLE_METADATA);
+                        let curRev = 0;
+                        if (curMetaStr) {
+                            try { curRev = JSON.parse(curMetaStr)?.revisionId || 0; } catch {}
+                        }
+                        if (incMeta && typeof incMeta.revisionId === 'number' && incMeta.revisionId < curRev) {
+                            return; // Stale timetable revision rejected
+                        }
+                    }
+
                     // Prevent fast polling loop from reverting a fresh local timetable mutation during in-flight network roundtrip
                     if (Date.now() - this.lastLocalTimetableMutation < 4000) {
                         return;
@@ -185,6 +229,12 @@ class CloudSync {
                             localStorage.setItem(k, valStr);
                             changed = true;
                         }
+                    }
+                } else if (k === KEYS.TIMETABLE_DRAFT) {
+                    const valStr = typeof payload === 'string' ? payload : JSON.stringify(payload || {});
+                    if (valStr !== localStorage.getItem(k)) {
+                        localStorage.setItem(k, valStr);
+                        changed = true;
                     }
                 } else if (k === KEYS.SETTINGS || k === KEYS.THEME) {
                     const valStr = typeof payload === 'string' ? payload : JSON.stringify(payload || {});
@@ -295,7 +345,7 @@ class CloudSync {
         }
     }
 
-    private startFast500msSyncLoop() {
+    private startFallbackSyncLoop() {
         if (this.syncInterval) clearInterval(this.syncInterval);
 
         const pollFn = async () => {
@@ -322,7 +372,7 @@ class CloudSync {
         };
 
         pollFn();
-        this.syncInterval = setInterval(pollFn, 500);
+        this.syncInterval = setInterval(pollFn, 10000);
     }
 
     private async pushToServerApi(payloadObj: { key?: string; item_id?: string; data?: any; isDelete?: boolean; updates?: Record<string, any> }) {
@@ -378,7 +428,26 @@ class CloudSync {
                                 if (docUpdatedAt >= lastSeen) {
                                     this.lastFirestoreTimestamps[key] = docUpdatedAt;
                                     let payload = data.payload;
-                                    if (key === KEYS.TIMETABLE || key === KEYS.SETTINGS || key === KEYS.THEME) {
+                                    if (key === KEYS.TIMETABLE_METADATA) {
+                                        let parsedMeta: any = payload;
+                                        if (typeof payload === 'string') {
+                                            try { parsedMeta = JSON.parse(payload); } catch {}
+                                        }
+                                        if (parsedMeta && typeof parsedMeta.revisionId === 'number') {
+                                            const currentMetaStr = localStorage.getItem(KEYS.TIMETABLE_METADATA);
+                                            let currentRev = 0;
+                                            if (currentMetaStr) {
+                                                try { currentRev = JSON.parse(currentMetaStr)?.revisionId || 0; } catch {}
+                                            }
+                                            if (parsedMeta.revisionId >= currentRev) {
+                                                const str = JSON.stringify(parsedMeta);
+                                                if (str !== currentMetaStr) {
+                                                    localStorage.setItem(key, str);
+                                                    changed = true;
+                                                }
+                                            }
+                                        }
+                                    } else if (key === KEYS.TIMETABLE || key === KEYS.SETTINGS || key === KEYS.THEME || key === KEYS.TIMETABLE_DRAFT) {
                                         if (key === KEYS.TIMETABLE) {
                                             if (Date.now() - this.lastLocalTimetableMutation < 4000) {
                                                 return;
@@ -1210,7 +1279,25 @@ export const storage = {
       cloud.deleteItem(KEYS.ADMINS, id);
   },
 
-  // --- TIMETABLE ---
+  // --- TIMETABLE & DRAFT MANAGEMENT ---
+  getTimetableMetadata: (): TimetableMetadata => {
+    const raw = localStorage.getItem(KEYS.TIMETABLE_METADATA);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.revisionId === 'number') {
+          return parsed;
+        }
+      } catch {}
+    }
+    return {
+      revisionId: 1,
+      publishedAt: Date.now(),
+      publishedBy: 'System',
+      status: 'PUBLISHED'
+    };
+  },
+
   getTimetable: (): TimetableGrid | null => {
     const data = localStorage.getItem(KEYS.TIMETABLE);
     if (data) {
@@ -1239,48 +1326,97 @@ export const storage = {
     return null;
   },
 
-  saveTimetable: (grid: TimetableGrid, user: string = 'System') => {
+  getDraftTimetable: (): TimetableGrid | null => {
+    const data = localStorage.getItem(KEYS.TIMETABLE_DRAFT);
+    if (data) {
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+          return parsed;
+        }
+      } catch {}
+    }
+    return null;
+  },
+
+  hasUnpublishedDraft: (): boolean => {
+    const draft = storage.getDraftTimetable();
+    return !!draft && Object.keys(draft).length > 0;
+  },
+
+  saveDraftTimetable: (grid: TimetableGrid) => {
+    const sanitizedGrid = storage.sanitizeTimetableGrid(grid);
+    localStorage.setItem(KEYS.TIMETABLE_DRAFT, JSON.stringify(sanitizedGrid));
+    cloud.pushObject(KEYS.TIMETABLE_DRAFT, sanitizedGrid);
+    cloud.notify(false);
+  },
+
+  discardDraftTimetable: () => {
+    localStorage.removeItem(KEYS.TIMETABLE_DRAFT);
+    cloud.deleteItem(KEYS.TIMETABLE_DRAFT, 'fixed');
+    cloud.notify(false);
+  },
+
+  publishTimetable: (grid: TimetableGrid, user: string = 'System'): TimetableMetadata => {
     cloud.lastLocalTimetableMutation = Date.now();
     const sanitizedGrid = storage.sanitizeTimetableGrid(grid);
+    const prevMeta = storage.getTimetableMetadata();
+    const nextRevisionId = (prevMeta.revisionId || 0) + 1;
+    const newMeta: TimetableMetadata = {
+      revisionId: nextRevisionId,
+      publishedAt: Date.now(),
+      publishedBy: user,
+      status: 'PUBLISHED'
+    };
+
     const current = storage.getTimetable();
     const updates: Record<string, any> = {};
-    
+
     if (current) {
-        const newHistory: HistoryEntry = {
-            id: crypto.randomUUID(),
-            timestamp: Date.now(),
-            action: 'Timetable Update',
-            user: user,
-            snapshot: current
-        };
-        const history = storage.getHistory();
-        history.push(newHistory);
-        localStorage.setItem(KEYS.HISTORY, JSON.stringify(history));
-        updates[`${KEYS.HISTORY}.${newHistory.id}`] = newHistory;
+      const newHistory: HistoryEntry = {
+        id: crypto.randomUUID(),
+        timestamp: Date.now(),
+        action: `Timetable Published (Rev #${nextRevisionId})`,
+        user: user,
+        snapshot: current
+      };
+      const history = storage.getHistory();
+      history.push(newHistory);
+      localStorage.setItem(KEYS.HISTORY, JSON.stringify(history));
+      updates[`${KEYS.HISTORY}.${newHistory.id}`] = newHistory;
     }
-    
+
     localStorage.setItem(KEYS.TIMETABLE, JSON.stringify(sanitizedGrid));
+    localStorage.setItem(KEYS.TIMETABLE_METADATA, JSON.stringify(newMeta));
+    localStorage.removeItem(KEYS.TIMETABLE_DRAFT);
+
     updates[KEYS.TIMETABLE] = sanitizedGrid;
+    updates[KEYS.TIMETABLE_METADATA] = newMeta;
 
     // Add notification
     const newNote: AppNotification = {
-        id: crypto.randomUUID(),
-        timestamp: Date.now(),
-        isRead: false,
-        recipientId: 'ALL',
-        title: 'New Timetable Published',
-        message: `${user} has published a new version of the master schedule.`,
-        details: 'Please check your personal schedule for any changes to your assigned classes or periods.',
-        type: 'INFO',
-        category: 'TIMETABLE'
+      id: crypto.randomUUID(),
+      timestamp: Date.now(),
+      isRead: false,
+      recipientId: 'ALL',
+      title: `Timetable Published (Revision #${nextRevisionId})`,
+      message: `${user} has officially published schedule revision #${nextRevisionId}.`,
+      details: 'All faculty and student views have been updated to this authoritative revision.',
+      type: 'INFO',
+      category: 'TIMETABLE'
     };
     const notes = safeParseArray<AppNotification>(localStorage.getItem(KEYS.NOTIFICATIONS), []);
     notes.push(newNote);
     localStorage.setItem(KEYS.NOTIFICATIONS, JSON.stringify(notes));
     updates[`${KEYS.NOTIFICATIONS}.${newNote.id}`] = newNote;
 
-    // Atomic push for instant sync
+    // Atomic push for instant sync across all connected clients
     cloud.pushUpdates(updates);
+    return newMeta;
+  },
+
+  saveTimetable: (grid: TimetableGrid, user: string = 'System') => {
+    return storage.publishTimetable(grid, user);
   },
 
   // --- SESSIONS & AUTH ---
