@@ -62,21 +62,39 @@ export const DeveloperConsoleModal: React.FC<DeveloperConsoleModalProps> = ({
     }
   }, [isOpen]);
 
-  const loadTeachers = () => {
+  const loadTeachers = async () => {
+    try {
+      const res = await fetch('/api/developer/teachers?password=proxonline26');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.teachers) setTeachersList(data.teachers);
+        return;
+      }
+    } catch {}
     setTeachersList(storage.getTeachers());
   };
 
-  const handleRegenerateRecoveryCode = (teacherId: string) => {
-    const list = storage.getTeachers();
-    const idx = list.findIndex(t => t.id === teacherId);
-    if (idx !== -1) {
-      const newCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-      list[idx].recoveryCode = newCode;
-      storage.saveTeacher(list[idx]);
-      setTeachersList([...list]);
-      setSuccessMsg(`Generated new recovery code for ${list[idx].name}: ${newCode}`);
-      setTimeout(() => setSuccessMsg(''), 4000);
-    }
+  const handleRegenerateRecoveryCode = async (teacherId: string) => {
+    try {
+      const res = await fetch('/api/developer/regenerate-recovery-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: 'proxonline26', teacherId })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const list = [...teachersList];
+        const idx = list.findIndex(t => t.id === teacherId);
+        if (idx !== -1) {
+          list[idx].recoveryCode = data.recoveryCode;
+          setTeachersList(list);
+          setSuccessMsg(`Generated new recovery code for ${list[idx].name}: ${data.recoveryCode}`);
+          setTimeout(() => setSuccessMsg(''), 4000);
+        }
+        return;
+      }
+    } catch {}
+    setErrorMsg('Failed to regenerate recovery code on server.');
   };
 
   const fetchTelemetry = async () => {
@@ -96,6 +114,7 @@ export const DeveloperConsoleModal: React.FC<DeveloperConsoleModalProps> = ({
       setIsAuthenticated(true);
       setErrorMsg('');
       fetchTelemetry();
+      loadTeachers();
     } else {
       setErrorMsg('Incorrect developer password.');
     }

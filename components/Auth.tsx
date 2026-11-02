@@ -24,7 +24,6 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
   const [pendingVerification, setPendingVerification] = useState<{
     name: string;
     username: string;
-    recoveryCode: string;
     teacherId?: string;
     schoolName: string;
     email?: string;
@@ -132,6 +131,9 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
         return;
       }
 
+      if (data.devCode) {
+        setVerificationCode(data.devCode);
+      }
       setSignupStep('VERIFY_CODE');
       setResendCooldown(30);
     } catch (e: any) {
@@ -183,61 +185,13 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
       setPendingVerification({
         name: formData.name.trim(),
         username: formData.username.trim().toLowerCase(),
-        recoveryCode: data.recoveryCode,
         teacherId: data.user?.id,
         schoolName: currentSchool.name,
         email: formData.email.trim().toLowerCase()
       });
-    } catch (e) {
-      const teachers = storage.getTeachers();
-      if (teachers.find(t => (t.username || '').toLowerCase() === formData.username.trim().toLowerCase())) {
-        setError('Username taken.');
-        setIsLoading(false);
-        return;
-      }
-      const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-      const newTeacher: Teacher = {
-        id: crypto.randomUUID(),
-        name: formData.name.trim(),
-        username: formData.username.trim().toLowerCase(),
-        password: formData.password.trim(),
-        recoveryCode: code,
-        contactEmail: formData.email.trim().toLowerCase(),
-        emailVerified: true,
-        subjectsTaught: [],
-        assignedClasses: [],
-        availability: Array.from({ length: 5 }).reduce((acc, _, day) => {
-          acc[day] = Array.from({ length: 8 }).reduce((pAcc, _, period) => {
-            pAcc[period] = Availability.AVAILABLE;
-            return pAcc;
-          }, {} as Record<number, Availability>);
-          return acc;
-        }, {} as any) as Record<number, Record<number, Availability>>,
-        isCompleted: false,
-        schoolId: currentSchool.id,
-        isApproved: false,
-        approvalStatus: 'PENDING',
-        registeredAt: Date.now()
-      };
-      storage.saveTeacher(newTeacher);
-
-      storage.addNotification({
-        recipientId: 'ADMIN',
-        title: `⚠️ New Staff Verification Needed: ${formData.name}`,
-        message: `${formData.name} (@${formData.username}) has registered with verified email (${formData.email}) for ${currentSchool.name}. Please verify that they are legitimate staff from the school and not an imposter.`,
-        details: 'Go to Faculty Approvals in Admin Dashboard to approve or reject.',
-        type: 'ALERT',
-        category: 'REQUEST'
-      });
-
-      setPendingVerification({
-        name: formData.name.trim(),
-        username: formData.username.trim().toLowerCase(),
-        recoveryCode: code,
-        teacherId: newTeacher.id,
-        schoolName: currentSchool.name,
-        email: formData.email.trim().toLowerCase()
-      });
+    } catch (e: any) {
+      // Strictly enforce authoritative server registration. Do not create local accounts or bypasses on failure.
+      setError(e?.message || 'Server registration failed. Please check your network connection and try again.');
     } finally {
       setIsLoading(false);
     }
@@ -353,28 +307,66 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
     }
   };
 
-  const handleRecovery = () => {
-    fakeLoad(() => {
-        const inputIdentifier = formData.username.trim().toLowerCase();
-        const inputCode = formData.recoveryCode.trim().toUpperCase();
-        const teachers = storage.getTeachers();
-        const teacher = teachers.find(t => 
-            (t.username?.trim().toLowerCase() === inputIdentifier || t.name?.trim().toLowerCase() === inputIdentifier) && 
-            t.recoveryCode?.trim().toUpperCase() === inputCode
-        );
-        if (teacher) { setRecoveringTeacherId(teacher.id); setView('RESET'); setError(''); } 
-        else setError('Invalid Recovery Code.');
-    });
+  const handleRecovery = async () => {
+    const inputIdentifier = formData.username.trim().toLowerCase();
+    const inputCode = formData.recoveryCode.trim().toUpperCase();
+    if (!inputIdentifier || !inputCode) {
+      setError('Username/Email and recovery code are required.');
+      return;
+    }
+    setIsLoading(true);
+    setError('');
+    try {
+      const res = await fetch('/api/auth/recover-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: inputIdentifier, recoveryCode: inputCode })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setRecoveringTeacherId(data.teacherId);
+        setView('RESET');
+        setError('');
+      } else {
+        setError(data.error || 'Invalid recovery code or account not found.');
+      }
+    } catch {
+      setError('Unable to contact server. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handlePasswordReset = () => {
-      if (!formData.newPassword || formData.newPassword.length < 4) { setError('Password too short.'); return; }
-      fakeLoad(() => {
-          if (recoveringTeacherId) {
-              storage.updateTeacherPassword(recoveringTeacherId, formData.newPassword);
-              switchView('LOGIN');
-          }
+  const handlePasswordReset = async () => {
+    if (!formData.newPassword || formData.newPassword.length < 6) {
+      setError('Password must be at least 6 characters.');
+      return;
+    }
+    if (!recoveringTeacherId) return;
+    setIsLoading(true);
+    setError('');
+    try {
+      const res = await fetch('/api/auth/reset-password-recovery', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teacherId: recoveringTeacherId,
+          recoveryCode: formData.recoveryCode.trim().toUpperCase(),
+          newPassword: formData.newPassword.trim()
+        })
       });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        switchView('LOGIN');
+        setError('');
+      } else {
+        setError(data.error || 'Failed to reset password.');
+      }
+    } catch {
+      setError('Unable to contact server. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const copyCode = () => {

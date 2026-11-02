@@ -98,6 +98,18 @@ export async function syncOtaStoreDocToFirestore(key: string, payload: any): Pro
   try {
     const cleanPayload = JSON.parse(JSON.stringify(payload ?? null));
     const now = Date.now();
+    // Only attempt adminDb if an explicit service account credential was loaded
+    if (credential && adminDb) {
+      try {
+        await adminDb.collection('ota_app_store').doc(key).set({
+          payload: cleanPayload,
+          updatedAt: now
+        });
+        return true;
+      } catch (adminErr) {
+        // Fallback to clientDb
+      }
+    }
     await clientSetDoc(clientDoc(clientDb, 'ota_app_store', key), {
       payload: cleanPayload,
       updatedAt: now
@@ -111,6 +123,14 @@ export async function syncOtaStoreDocToFirestore(key: string, payload: any): Pro
 
 export async function deleteOtaStoreDocFromFirestore(key: string): Promise<boolean> {
   try {
+    if (credential && adminDb) {
+      try {
+        await adminDb.collection('ota_app_store').doc(key).delete();
+        return true;
+      } catch (adminErr) {
+        // Fallback to clientDb
+      }
+    }
     await clientDeleteDoc(clientDoc(clientDb, 'ota_app_store', key));
     return true;
   } catch (err) {

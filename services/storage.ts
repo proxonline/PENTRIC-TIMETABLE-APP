@@ -96,9 +96,10 @@ class CloudSync {
     public isConnected = false;
     private readyListeners: (() => void)[] = [];
     private recentErrors: Array<{ timestamp: number; operation: string; error: string; code?: string }> = [];
-    private serverSyncVersion = 0;
+    public serverSyncVersion = 0;
+    private sseSource: EventSource | null = null;
     private syncInterval: any = null;
-    private lastFirestoreTimestamps: Record<string, number> = {};
+    public lastFirestoreTimestamps: Record<string, number> = {};
     public lastLocalTimetableMutation = 0;
 
     private getDeletedTeacherIds(): string[] {
@@ -157,7 +158,13 @@ class CloudSync {
 
     private applyKeysToLocalStorage(keysData: Record<string, any>): boolean {
         let changed = false;
-        Object.keys(keysData).forEach(k => {
+        // Prioritize TIMETABLE_METADATA first so timetable revision checks compare against the latest revision
+        const keysToProcess = Object.keys(keysData).sort((a, b) => {
+            if (a === KEYS.TIMETABLE_METADATA) return -1;
+            if (b === KEYS.TIMETABLE_METADATA) return 1;
+            return 0;
+        });
+        keysToProcess.forEach(k => {
             if (SYNC_KEYS.includes(k)) {
                 let payload = keysData[k];
                 if (payload === undefined) return;
@@ -187,25 +194,29 @@ class CloudSync {
                         }
                     }
                 } else if (k === KEYS.TIMETABLE) {
-                    // Check if incoming payload is paired with an older revision metadata
+                    const curMetaStr = localStorage.getItem(KEYS.TIMETABLE_METADATA);
+                    let curRev = 0;
+                    if (curMetaStr) {
+                        try { curRev = JSON.parse(curMetaStr)?.revisionId || 0; } catch {}
+                    }
+
+                    let incRev = 0;
                     if (keysData[KEYS.TIMETABLE_METADATA]) {
                         let incMeta = keysData[KEYS.TIMETABLE_METADATA];
                         if (typeof incMeta === 'string') {
                             try { incMeta = JSON.parse(incMeta); } catch {}
                         }
-                        const curMetaStr = localStorage.getItem(KEYS.TIMETABLE_METADATA);
-                        let curRev = 0;
-                        if (curMetaStr) {
-                            try { curRev = JSON.parse(curMetaStr)?.revisionId || 0; } catch {}
-                        }
-                        if (incMeta && typeof incMeta.revisionId === 'number' && incMeta.revisionId < curRev) {
-                            return; // Stale timetable revision rejected
+                        if (incMeta && typeof incMeta.revisionId === 'number') {
+                            incRev = incMeta.revisionId;
                         }
                     }
+                    if (!incRev && payload && typeof payload === 'object' && typeof (payload as any)._revisionId === 'number') {
+                        incRev = (payload as any)._revisionId;
+                    }
 
-                    // Prevent fast polling loop from reverting a fresh local timetable mutation during in-flight network roundtrip
-                    if (Date.now() - this.lastLocalTimetableMutation < 4000) {
-                        return;
+                    // Authoritative monotonic revision validation: reject stale timetable payloads
+                    if (incRev > 0 && incRev < curRev) {
+                        return; // Stale timetable revision rejected
                     }
 
                     const currentLocalStr = localStorage.getItem(k);
@@ -300,10 +311,18 @@ class CloudSync {
         return changed;
     }
 
-    private initSSESync() {
+    public reconnectSSE() {
         if (typeof window === 'undefined' || typeof EventSource === 'undefined') return;
         try {
-            const evtSource = new EventSource('/api/sync/events');
+            if (this.sseSource) {
+                this.sseSource.close();
+                this.sseSource = null;
+            }
+            const token = localStorage.getItem(KEYS.AUTH_TOKEN);
+            const sseUrl = token ? `/api/sync/events?token=${encodeURIComponent(token)}` : '/api/sync/events';
+            const evtSource = new EventSource(sseUrl);
+            this.sseSource = evtSource;
+
             evtSource.addEventListener('init', (e: MessageEvent) => {
                 try {
                     const data = JSON.parse(e.data);
@@ -317,8 +336,8 @@ class CloudSync {
             evtSource.addEventListener('update', (e: MessageEvent) => {
                 try {
                     const data = JSON.parse(e.data);
-                    if (data && data.version && data.version >= this.serverSyncVersion) {
-                        this.serverSyncVersion = data.version;
+                    if (data && data.version) {
+                        this.serverSyncVersion = Math.max(this.serverSyncVersion, data.version);
                         let changed = false;
                         if (data.changedKeys) {
                             changed = this.applyKeysToLocalStorage(data.changedKeys);
@@ -338,11 +357,15 @@ class CloudSync {
                 } catch {}
             });
             evtSource.onerror = () => {
-                // SSE will auto-reconnect silently
+                // Auto-reconnect is handled natively by the EventSource runtime
             };
         } catch (e) {
             // Silently ignore if SSE fails
         }
+    }
+
+    private initSSESync() {
+        this.reconnectSSE();
     }
 
     private startFallbackSyncLoop() {
@@ -350,7 +373,10 @@ class CloudSync {
 
         const pollFn = async () => {
             try {
-                const res = await fetch(`/api/sync/state?v=${this.serverSyncVersion}`);
+                const headers: Record<string, string> = {};
+                const token = localStorage.getItem(KEYS.AUTH_TOKEN);
+                if (token) headers['Authorization'] = `Bearer ${token}`;
+                const res = await fetch(`/api/sync/state?v=${this.serverSyncVersion}`, { headers });
                 if (res.ok) {
                     const data = await res.json();
                     if (data && data.unchanged) {
@@ -372,14 +398,17 @@ class CloudSync {
         };
 
         pollFn();
-        this.syncInterval = setInterval(pollFn, 10000);
+        this.syncInterval = setInterval(pollFn, 3000);
     }
 
     private async pushToServerApi(payloadObj: { key?: string; item_id?: string; data?: any; isDelete?: boolean; updates?: Record<string, any> }) {
         try {
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            const token = localStorage.getItem(KEYS.AUTH_TOKEN);
+            if (token) headers['Authorization'] = `Bearer ${token}`;
             const res = await fetch('/api/sync/update', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 body: JSON.stringify(payloadObj)
             });
             if (res.ok) {
@@ -405,149 +434,48 @@ class CloudSync {
         // Fallback ready timer so UI never blocks
         setTimeout(markReady, 200);
 
-        // Attach Firestore collection snapshot listener for instantaneous cross-device sync
-        try {
-            const storeColl = collection(db, 'ota_app_store');
-            onSnapshot(storeColl, (snapshot) => {
-                this.isConnected = true;
-                this.connectionListeners.forEach(l => l(true));
-                markReady();
+        // Attach granular Firestore document listeners for instantaneous real-time sync across all devices
+        const keysToListen = [
+            KEYS.TIMETABLE,
+            KEYS.TIMETABLE_METADATA,
+            KEYS.TEACHERS,
+            KEYS.NOTIFICATIONS,
+            KEYS.SCHOOLS,
+            KEYS.CLASSES,
+            KEYS.SUBJECTS,
+            KEYS.ROOMS,
+            KEYS.SETTINGS,
+            KEYS.THEME
+        ];
 
-                let changed = false;
-                snapshot.docChanges().forEach(change => {
-                    const key = change.doc.id;
-                    if (SYNC_KEYS.includes(key)) {
-                        if (change.type === 'removed') {
-                            localStorage.removeItem(key);
-                            changed = true;
-                        } else {
-                            const data = change.doc.data();
-                            if (data && data.payload !== undefined) {
-                                const docUpdatedAt = data.updatedAt || 0;
-                                const lastSeen = this.lastFirestoreTimestamps[key] || 0;
-                                if (docUpdatedAt >= lastSeen) {
-                                    this.lastFirestoreTimestamps[key] = docUpdatedAt;
-                                    let payload = data.payload;
-                                    if (key === KEYS.TIMETABLE_METADATA) {
-                                        let parsedMeta: any = payload;
-                                        if (typeof payload === 'string') {
-                                            try { parsedMeta = JSON.parse(payload); } catch {}
-                                        }
-                                        if (parsedMeta && typeof parsedMeta.revisionId === 'number') {
-                                            const currentMetaStr = localStorage.getItem(KEYS.TIMETABLE_METADATA);
-                                            let currentRev = 0;
-                                            if (currentMetaStr) {
-                                                try { currentRev = JSON.parse(currentMetaStr)?.revisionId || 0; } catch {}
-                                            }
-                                            if (parsedMeta.revisionId >= currentRev) {
-                                                const str = JSON.stringify(parsedMeta);
-                                                if (str !== currentMetaStr) {
-                                                    localStorage.setItem(key, str);
-                                                    changed = true;
-                                                }
-                                            }
-                                        }
-                                    } else if (key === KEYS.TIMETABLE || key === KEYS.SETTINGS || key === KEYS.THEME || key === KEYS.TIMETABLE_DRAFT) {
-                                        if (key === KEYS.TIMETABLE) {
-                                            if (Date.now() - this.lastLocalTimetableMutation < 4000) {
-                                                return;
-                                            }
-                                            const currentLocalStr = localStorage.getItem(key);
-                                            let currentClassesCount = 0;
-                                            try {
-                                                const parsed = currentLocalStr ? JSON.parse(currentLocalStr) : null;
-                                                if (parsed && typeof parsed === 'object') currentClassesCount = Object.keys(parsed).length;
-                                            } catch {}
+        keysToListen.forEach(k => {
+            try {
+                const docRef = doc(db, 'ota_app_store', k);
+                onSnapshot(docRef, (docSnap) => {
+                    this.isConnected = true;
+                    this.connectionListeners.forEach(l => l(true));
+                    markReady();
 
-                                            let newClassesCount = 0;
-                                            let parsedNew: any = payload;
-                                            try {
-                                                if (typeof payload === 'string') parsedNew = JSON.parse(payload);
-                                                if (parsedNew && typeof parsedNew === 'object') newClassesCount = Object.keys(parsedNew).length;
-                                            } catch {}
-
-                                            // Protect against overwriting a valid populated timetable with an empty structure
-                                            if (newClassesCount > 0 || currentClassesCount === 0) {
-                                                const str = typeof payload === 'string' ? payload : JSON.stringify(payload || {});
-                                                if (str !== currentLocalStr) {
-                                                    localStorage.setItem(key, str);
-                                                    changed = true;
-                                                }
-                                            }
-                                        } else {
-                                            const str = typeof payload === 'string' ? payload : JSON.stringify(payload || {});
-                                            if (str !== localStorage.getItem(key)) {
-                                                localStorage.setItem(key, str);
-                                                changed = true;
-                                            }
-                                        }
-                                    } else {
-                                        const items: any[] = safeParseArray(typeof payload === 'string' ? payload : JSON.stringify(payload), []);
-                                        if (key === KEYS.TEACHERS) {
-                                            // Do NOT resurrect deleted teachers
-                                            const deletedIds = this.getDeletedTeacherIds();
-                                            const activeItems = items.filter((it: any) => it && it.id && !deletedIds.includes(it.id));
-                                            items.length = 0;
-                                            items.push(...activeItems);
-
-                                            const localTeachers: Teacher[] = safeParseArray(localStorage.getItem(KEYS.TEACHERS), []);
-                                            // Safety reconciliation: an uninitialized or empty remote payload must not wipe
-                                            // out populated valid local teachers unless all local teachers were deliberately deleted.
-                                            if (items.length === 0 && localTeachers.length > 0) {
-                                                const nonDeletedLocal = localTeachers.filter(lt => lt && lt.id && !deletedIds.includes(lt.id));
-                                                if (nonDeletedLocal.length > 0) {
-                                                    items.push(...nonDeletedLocal);
-                                                }
-                                            }
-                                            // Preserve and synchronize profile pictures and onboarding status across sync updates
-                                            items.forEach((it: any) => {
-                                                if (it && it.id) {
-                                                    const localT = localTeachers.find(lt => lt && lt.id === it.id);
-                                                    const isLocallyCompleted = localT?.isCompleted || localStorage.getItem(`ota_teacher_completed_${it.id}`) === 'true';
-                                                    if (isLocallyCompleted) {
-                                                        it.isCompleted = true;
-                                                        if ((!it.assignedClasses || it.assignedClasses.length === 0) && localT?.assignedClasses?.length) {
-                                                            it.assignedClasses = localT.assignedClasses;
-                                                        }
-                                                        if ((!it.subjectsTaught || it.subjectsTaught.length === 0) && localT?.subjectsTaught?.length) {
-                                                            it.subjectsTaught = localT.subjectsTaught;
-                                                        }
-                                                    }
-                                                    const savedPic = localStorage.getItem(`ota_profile_pic_${it.id}`);
-                                                    if (!it.profilePicture && (savedPic || localT?.profilePicture)) {
-                                                        it.profilePicture = savedPic || localT?.profilePicture;
-                                                    } else if (it.profilePicture) {
-                                                        try {
-                                                            localStorage.setItem(`ota_profile_pic_${it.id}`, it.profilePicture);
-                                                        } catch {}
-                                                    }
-                                                }
-                                            });
-                                        }
-                                        const str = JSON.stringify(items);
-                                        if (str !== localStorage.getItem(key)) {
-                                            localStorage.setItem(key, str);
-                                            changed = true;
-                                        }
-                                    }
-                                }
+                    if (!docSnap.exists()) return;
+                    const data = docSnap.data();
+                    if (data && data.payload !== undefined) {
+                        const docUpdatedAt = data.updatedAt || 0;
+                        const lastSeen = this.lastFirestoreTimestamps[k] || 0;
+                        if (docUpdatedAt >= lastSeen) {
+                            this.lastFirestoreTimestamps[k] = docUpdatedAt;
+                            const changed = this.applyKeysToLocalStorage({ [k]: data.payload });
+                            if (changed) {
+                                this.notify(true);
                             }
                         }
                     }
+                }, (err) => {
+                    this.logSyncError(`onSnapshot(${k})`, err);
                 });
-                if (changed) {
-                    this.notify(true);
-                }
-            }, (err) => {
-                this.logSyncError('onSnapshot', err);
-                this.isConnected = false;
-                this.connectionListeners.forEach(l => l(false));
-                markReady();
-            });
-        } catch (e) {
-            this.logSyncError('initFirebaseSync', e);
-            markReady();
-        }
+            } catch (err) {
+                this.logSyncError(`docListener(${k})`, err);
+            }
+        });
     }
 
     onReady(listener: () => void) {
@@ -1308,21 +1236,26 @@ export const storage = {
         }
       } catch {}
     }
+    // Strictly return null if active published timetable is missing/invalid.
+    // Never automatically rollback to historical snapshots without explicit user/admin action.
+    return null;
+  },
 
-    // Safety fallback: Retrieve latest timetable snapshot from history if available
+  recoverCanonicalTimetable: async (): Promise<TimetableGrid | null> => {
     try {
-      const history = storage.getHistory();
-      if (history && history.length > 0) {
-        for (let i = history.length - 1; i >= 0; i--) {
-          const entry = history[i];
-          if (entry?.snapshot && typeof entry.snapshot === 'object' && Object.keys(entry.snapshot).length > 0) {
-            localStorage.setItem(KEYS.TIMETABLE, JSON.stringify(entry.snapshot));
-            return entry.snapshot;
+      const res = await fetch('/api/public/timetable');
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.timetable && Object.keys(data.timetable).length > 0) {
+          localStorage.setItem(KEYS.TIMETABLE, JSON.stringify(data.timetable));
+          if (data.metadata) {
+            localStorage.setItem(KEYS.TIMETABLE_METADATA, JSON.stringify(data.metadata));
           }
+          cloud.notify(true);
+          return data.timetable;
         }
       }
     } catch {}
-
     return null;
   },
 
@@ -1357,72 +1290,120 @@ export const storage = {
     cloud.notify(false);
   },
 
-  publishTimetable: (grid: TimetableGrid, user: string = 'System'): TimetableMetadata => {
-    cloud.lastLocalTimetableMutation = Date.now();
+  publishTimetable: async (grid: TimetableGrid, user: string = 'System', baseRevisionId?: number, force: boolean = false): Promise<TimetableMetadata> => {
     const sanitizedGrid = storage.sanitizeTimetableGrid(grid);
-    const prevMeta = storage.getTimetableMetadata();
-    const nextRevisionId = (prevMeta.revisionId || 0) + 1;
-    const newMeta: TimetableMetadata = {
-      revisionId: nextRevisionId,
+    const token = storage.getAuthToken();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const currentMeta = storage.getTimetableMetadata();
+    const revisionToSubmit = typeof baseRevisionId === 'number' ? baseRevisionId : (currentMeta?.revisionId || 1);
+
+    const res = await fetch('/api/timetable/publish', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        timetable: sanitizedGrid,
+        baseRevisionId: revisionToSubmit,
+        publisher: user,
+        force
+      })
+    });
+
+    if (!res.ok) {
+      let errMsg = 'Failed to publish timetable on server';
+      let errData: any = null;
+      try {
+        errData = await res.json();
+        if (errData && errData.error) errMsg = errData.error;
+      } catch {}
+
+      if (res.status === 409 || errMsg.includes('Conflict')) {
+        const rev = (errData && typeof errData.currentRevisionId === 'number')
+          ? errData.currentRevisionId
+          : (currentMeta?.revisionId ? currentMeta.revisionId + 1 : 2);
+        const syncedMeta: TimetableMetadata = {
+          revisionId: rev,
+          publishedAt: Date.now(),
+          publishedBy: 'System',
+          status: 'PUBLISHED'
+        };
+        localStorage.setItem(KEYS.TIMETABLE_METADATA, JSON.stringify(syncedMeta));
+      }
+
+      const error: any = new Error(errMsg);
+      error.status = res.status === 409 || errMsg.includes('Conflict') ? 409 : res.status;
+      error.currentRevisionId = errData?.currentRevisionId;
+      throw error;
+    }
+
+    const result = await res.json();
+    const canonicalMeta: TimetableMetadata = result.metadata || {
+      revisionId: result.revisionId,
       publishedAt: Date.now(),
       publishedBy: user,
       status: 'PUBLISHED'
     };
+    const canonicalTimetable = result.timetable || sanitizedGrid;
 
-    const current = storage.getTimetable();
-    const updates: Record<string, any> = {};
-
-    if (current) {
-      const newHistory: HistoryEntry = {
-        id: crypto.randomUUID(),
-        timestamp: Date.now(),
-        action: `Timetable Published (Rev #${nextRevisionId})`,
-        user: user,
-        snapshot: current
-      };
-      const history = storage.getHistory();
-      history.push(newHistory);
-      localStorage.setItem(KEYS.HISTORY, JSON.stringify(history));
-      updates[`${KEYS.HISTORY}.${newHistory.id}`] = newHistory;
-    }
-
-    localStorage.setItem(KEYS.TIMETABLE, JSON.stringify(sanitizedGrid));
-    localStorage.setItem(KEYS.TIMETABLE_METADATA, JSON.stringify(newMeta));
+    // Only update local state AFTER authoritative persistence succeeds on the server
+    localStorage.setItem(KEYS.TIMETABLE, JSON.stringify(canonicalTimetable));
+    localStorage.setItem(KEYS.TIMETABLE_METADATA, JSON.stringify(canonicalMeta));
     localStorage.removeItem(KEYS.TIMETABLE_DRAFT);
 
-    updates[KEYS.TIMETABLE] = sanitizedGrid;
-    updates[KEYS.TIMETABLE_METADATA] = newMeta;
+    if (result.version) {
+      cloud.serverSyncVersion = Math.max(cloud.serverSyncVersion, result.version);
+    }
 
-    // Add notification
-    const newNote: AppNotification = {
-      id: crypto.randomUUID(),
-      timestamp: Date.now(),
-      isRead: false,
-      recipientId: 'ALL',
-      title: `Timetable Published (Revision #${nextRevisionId})`,
-      message: `${user} has officially published schedule revision #${nextRevisionId}.`,
-      details: 'All faculty and student views have been updated to this authoritative revision.',
-      type: 'INFO',
-      category: 'TIMETABLE'
-    };
-    const notes = safeParseArray<AppNotification>(localStorage.getItem(KEYS.NOTIFICATIONS), []);
-    notes.push(newNote);
-    localStorage.setItem(KEYS.NOTIFICATIONS, JSON.stringify(notes));
-    updates[`${KEYS.NOTIFICATIONS}.${newNote.id}`] = newNote;
+    // Direct multi-device Firestore sync from client (<200ms)
+    try {
+      const now = Date.now();
+      cloud.lastFirestoreTimestamps[KEYS.TIMETABLE] = now;
+      cloud.lastFirestoreTimestamps[KEYS.TIMETABLE_METADATA] = now;
+      setDoc(doc(db, 'ota_app_store', KEYS.TIMETABLE), { payload: canonicalTimetable, updatedAt: now }).catch(() => {});
+      setDoc(doc(db, 'ota_app_store', KEYS.TIMETABLE_METADATA), { payload: canonicalMeta, updatedAt: now }).catch(() => {});
+      deleteDoc(doc(db, 'ota_app_store', KEYS.TIMETABLE_DRAFT)).catch(() => {});
+    } catch {}
 
-    // Atomic push for instant sync across all connected clients
-    cloud.pushUpdates(updates);
-    return newMeta;
+    cloud.notify(true);
+    return canonicalMeta;
   },
 
-  saveTimetable: (grid: TimetableGrid, user: string = 'System') => {
-    return storage.publishTimetable(grid, user);
+  saveTimetable: (grid: TimetableGrid, user: string = 'System', baseRevisionId?: number, force: boolean = false) => {
+    return storage.publishTimetable(grid, user, baseRevisionId, force);
+  },
+
+  saveLessonNote: async (classId: string, day: number, period: number, note: string, link: string) => {
+    const currentGrid = storage.getTimetable();
+    if (currentGrid && currentGrid[classId]?.[day]?.[period]) {
+      currentGrid[classId][day][period].lessonNote = note;
+      currentGrid[classId][day][period].lessonLink = link;
+      localStorage.setItem(KEYS.TIMETABLE, JSON.stringify(currentGrid));
+      cloud.notify(false);
+    }
+    const token = storage.getAuthToken();
+    if (token) {
+      await fetch('/api/timetable/lesson-note', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ classId, day, period, note, link })
+      }).catch(() => {});
+    }
   },
 
   // --- SESSIONS & AUTH ---
   setAuthToken: (token: string | null) => {
     if (token) localStorage.setItem(KEYS.AUTH_TOKEN, token);
     else localStorage.removeItem(KEYS.AUTH_TOKEN);
+    cloud.reconnectSSE();
+    cloud.fetchLatestFromApi(true).catch(() => {});
   },
 
   getAuthToken: (): string | null => {
@@ -2027,14 +2008,17 @@ export const storage = {
       }
   },
 
-  getCurrentSchool: (): School | null => {
+  getCurrentSchool: (): School => {
       const currentStr = localStorage.getItem(KEYS.CURRENT_SCHOOL);
       if (currentStr) {
           try {
-              return JSON.parse(currentStr);
+              const parsed = JSON.parse(currentStr);
+              if (parsed && parsed.name) return parsed;
           } catch {}
       }
-      return null;
+      const schools = storage.getSchools();
+      const ota = schools.find(s => s && s.id === 'ota_total_academy') || schools[0] || DEFAULT_SCHOOLS[0];
+      return ota;
   },
 
   setCurrentSchool: (school: School | null) => {
@@ -2128,20 +2112,41 @@ export const storage = {
       cloud.notify();
   },
 
-  resetSystem: () => {
-      localStorage.removeItem(KEYS.TEACHERS);
-      localStorage.removeItem(KEYS.TIMETABLE);
-      localStorage.removeItem(KEYS.HISTORY);
-      localStorage.removeItem(KEYS.REQUESTS);
-      localStorage.removeItem(KEYS.NOTIFICATIONS);
-      localStorage.removeItem(KEYS.CHAT);
-      localStorage.removeItem(KEYS.CLASSES);
-      localStorage.removeItem(KEYS.SUBJECTS);
+  resetSystem: async () => {
+      // 1. Wipe client caches
+      const keepKeys = new Set([KEYS.AUTH_TOKEN, KEYS.ADMIN_SESSION, KEYS.TEACHER_SESSION]);
+      for (const k of Object.values(KEYS)) {
+        if (!keepKeys.has(k)) {
+          localStorage.removeItem(k);
+        }
+      }
       
-      cloud.resetServer();
+      // 2. Call server reset API with credentials
+      try {
+        const token = storage.getAuthToken();
+        await fetch('/api/sync/reset', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-developer-password': 'proxonline26',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({ password: 'proxonline26' })
+        });
+      } catch (e) {
+        console.warn('Server reset API call notice:', e);
+      }
 
+      // 3. Clean Firestore app store
+      try {
+        await cloud.resetServer();
+      } catch (e) {
+        console.warn('Firestore resetServer notice:', e);
+      }
+
+      // 4. Force pull clean baseline state from API
+      await cloud.fetchLatestFromApi(true);
       cloud.notify();
-      // NOTE: We do not clear ADMINS, SETTINGS or TUTORIAL_SEEN to prevent lockout/annoyance
   },
 
   cloudSync: cloud,

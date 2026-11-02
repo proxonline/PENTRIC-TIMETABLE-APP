@@ -288,21 +288,16 @@ export const TeacherDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) 
     });
   };
 
-  const handleSaveLessonNote = () => {
+  const handleSaveLessonNote = async () => {
     if (!lessonModal || !teacher) return;
-    const currentGrid = storage.getTimetable();
-    if (currentGrid && currentGrid[lessonModal.classId]?.[lessonModal.day]?.[lessonModal.period]) {
-      currentGrid[lessonModal.classId][lessonModal.day][lessonModal.period].lessonNote = lessonModal.note;
-      currentGrid[lessonModal.classId][lessonModal.day][lessonModal.period].lessonLink = lessonModal.link;
-      storage.saveTimetable(currentGrid);
-      storage.addAuditLog({
-        actorName: teacher.name,
-        actorRole: 'TEACHER',
-        action: 'LESSON_NOTE_UPDATE',
-        details: `Updated lesson note for Period ${lessonModal.period + 1}`
-      });
-      showToast('Lesson note saved', 'SUCCESS');
-    }
+    await storage.saveLessonNote(lessonModal.classId, lessonModal.day, lessonModal.period, lessonModal.note, lessonModal.link);
+    storage.addAuditLog({
+      actorName: teacher.name,
+      actorRole: 'TEACHER',
+      action: 'LESSON_NOTE_UPDATE',
+      details: `Updated lesson note for Period ${lessonModal.period + 1}`
+    });
+    showToast('Lesson note saved', 'SUCCESS');
     setLessonModal(null);
   };
 

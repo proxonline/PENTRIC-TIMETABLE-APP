@@ -150,6 +150,7 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
   const [timetableMetadata, setTimetableMetadata] = useState<TimetableMetadata>(() => storage.getTimetableMetadata());
   const [activeScheduleTab, setActiveScheduleTab] = useState<'PUBLISHED' | 'DRAFT'>('PUBLISHED');
   const [isPublishing, setIsPublishing] = useState<boolean>(false);
+  const [publishConflict, setPublishConflict] = useState<{ currentRevisionId: number; message: string } | null>(null);
   const [requests, setRequests] = useState<SwapRequest[]>([]);
   const [admins, setAdmins] = useState<AdminUser[]>([]);
   const [absences, setAbsences] = useState<TeacherAbsence[]>([]);
@@ -396,7 +397,7 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
     }
   };
 
-  const handleAssignSubstitute = (classId: string, day: number, period: number, subTeacherId: string) => {
+  const handleAssignSubstitute = async (classId: string, day: number, period: number, subTeacherId: string) => {
     const currentGrid = storage.getTimetable();
     if (currentGrid && currentGrid[classId]?.[day]?.[period]) {
       const slot = currentGrid[classId][day][period];
@@ -405,7 +406,12 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
 
       slot.teacherId = subTeacherId;
       slot.isManual = true;
-      storage.saveTimetable(currentGrid);
+      try {
+        await storage.saveTimetable(currentGrid);
+      } catch (err: any) {
+        showToast('Failed to persist substitution to server: ' + (err?.message || 'Error'), 'ALERT');
+        return;
+      }
 
       // Send outcome notification to substitute teacher
       if (subTeacher) {
@@ -565,6 +571,7 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
   };
 
   useEffect(() => {
+    storage.fetchLatestFromApi(true).catch(() => {});
     loadData();
     const unsubStorage = storage.subscribe(loadData);
     const unsubConn = storage.subscribeConnectionStatus((connected) => {
@@ -992,32 +999,40 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
       showToast('System settings updated successfully', 'SUCCESS');
   };
 
-  const handleSystemReset = () => {
-      // Wiping data is a critical action. In the iframe environment, 
-      // window.confirm and prompt are often blocked. 
-      // We'll execute the reset directly for now to ensure it works.
-      storage.resetSystem();
+  const handleSystemReset = async () => {
+      await storage.resetSystem();
       showToast('System Factory Reset Complete', 'ALERT');
       setTimeout(() => window.location.reload(), 1500);
   };
 
   // --- MANUAL EDITING & PUBLICATION LOGIC ---
-  const handlePublishDraft = () => {
+  const handlePublishDraft = async (force: boolean = false) => {
     const draftToPublish = draftGrid || grid;
     if (!draftToPublish || Object.keys(draftToPublish).length === 0) {
       showToast('No timetable draft available to publish.', 'ALERT');
       return;
     }
     setIsPublishing(true);
+    setPublishConflict(null);
     try {
-      const meta = storage.publishTimetable(draftToPublish, currentUser?.name || 'Administrator');
+      const currentMeta = storage.getTimetableMetadata();
+      const meta = await storage.publishTimetable(draftToPublish, currentUser?.name || 'Administrator', currentMeta.revisionId, force);
       setHasDraft(false);
       setDraftGrid(null);
       setActiveScheduleTab('PUBLISHED');
       loadData();
       showToast(`Master Timetable successfully published (Revision #${meta.revisionId})! All faculty and viewers updated.`, 'SUCCESS');
     } catch (e: any) {
-      showToast('Failed to publish timetable: ' + (e?.message || 'Unknown error'), 'ALERT');
+      if (e?.status === 409 || e?.message?.includes('Conflict')) {
+        loadData();
+        setPublishConflict({
+          currentRevisionId: e.currentRevisionId || (timetableMetadata.revisionId + 1),
+          message: e.message || 'The timetable was modified by another session.'
+        });
+        showToast('Revision conflict detected. You can review or overwrite to publish.', 'ALERT');
+      } else {
+        showToast('Failed to publish timetable: ' + (e?.message || 'Server error'), 'ALERT');
+      }
     } finally {
       setIsPublishing(false);
     }
@@ -1083,14 +1098,21 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
           storage.saveDraftTimetable(newGrid);
           setDraftGrid(newGrid);
           setHasDraft(true);
+          setShowCellEditModal(null);
+          showToast('Updated Slot in Draft', 'SUCCESS');
+          loadData();
       } else {
-          storage.publishTimetable(newGrid, `Manual Edit by ${currentUser?.name}`);
-          setGrid(newGrid);
+          try {
+              const currentMeta = storage.getTimetableMetadata();
+              await storage.publishTimetable(newGrid, `Manual Edit by ${currentUser?.name}`, currentMeta.revisionId);
+              setGrid(newGrid);
+              setShowCellEditModal(null);
+              showToast('Updated Slot and Published', 'SUCCESS');
+              loadData();
+          } catch (e: any) {
+              showToast('Failed to save timetable edit: ' + (e?.message || 'Server error'), 'ALERT');
+          }
       }
-      
-      setShowCellEditModal(null);
-      showToast('Updated Slot', 'SUCCESS');
-      loadData(); // Refresh conflicts
   };
 
   const handleMarkRead = (id: string) => { storage.markRead(id); loadData(); };
@@ -2044,7 +2066,7 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
                                         </div>
 
                                         <button
-                                            onClick={handlePublishDraft}
+                                            onClick={() => handlePublishDraft(false)}
                                             disabled={isPublishing}
                                             className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition-all shadow-md flex items-center gap-1.5 shrink-0"
                                             title="Publish Draft as authoritative schedule"
@@ -2135,7 +2157,7 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
 
                                 {hasDraft && (
                                     <button
-                                        onClick={handlePublishDraft}
+                                        onClick={() => handlePublishDraft(false)}
                                         disabled={isPublishing}
                                         className="w-full sm:w-auto px-5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-xl shadow-lg shadow-emerald-600/20 transition-all flex items-center justify-center gap-2"
                                         title="Publish Draft to All Faculty & Viewers"
@@ -4700,6 +4722,46 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
                         </div>
                     </form>
                 </div>
+            </div>
+        )}
+
+        {publishConflict && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[99] flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-200 animate-in fade-in zoom-in-95">
+                <div className="flex items-center gap-3 text-amber-600 mb-4">
+                  <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-200">
+                    <AlertTriangle size={24} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-900 text-base">Schedule Revision Conflict</h3>
+                    <p className="text-xs text-slate-500">Active server revision mismatch</p>
+                  </div>
+                </div>
+                <p className="text-sm text-slate-600 mb-6 leading-relaxed">
+                  The server schedule has advanced to <strong className="text-slate-900 font-semibold">Revision #{publishConflict.currentRevisionId}</strong>. Would you like to overwrite and publish this draft as the authoritative schedule now?
+                </p>
+                <div className="flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setPublishConflict(null)}
+                    className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-all"
+                  >
+                    Cancel & Review
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPublishConflict(null);
+                      handlePublishDraft(true);
+                    }}
+                    disabled={isPublishing}
+                    className="px-4 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 active:scale-95 rounded-xl transition-all shadow-md flex items-center gap-1.5"
+                  >
+                    {isPublishing ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                    <span>Overwrite & Publish</span>
+                  </button>
+                </div>
+              </div>
             </div>
         )}
 

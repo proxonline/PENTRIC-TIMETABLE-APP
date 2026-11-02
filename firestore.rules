@@ -43,7 +43,7 @@ service cloud.firestore {
       allow delete: if isValidId(schoolId) && schoolId != 'ota_total_academy';
     }
 
-    // Dynamic application sync collection
+    // Dynamic application sync collection for real-time cross-device sync:
     match /ota_app_store/{key} {
       allow read, write: if true;
     }

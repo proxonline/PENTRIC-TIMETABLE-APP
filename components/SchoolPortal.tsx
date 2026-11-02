@@ -112,12 +112,18 @@ export const SchoolPortal: React.FC<SchoolPortalProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans relative overflow-x-hidden">
+    <div 
+      className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans relative overflow-x-hidden"
+      style={{ backgroundColor: '#f8fafc', color: '#0f172a', colorScheme: 'light' }}
+    >
       {/* Subtle royal blue background gradients */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-7xl h-96 bg-[radial-gradient(ellipse_at_top,_rgba(37,99,235,0.08),_transparent_70%)] pointer-events-none"></div>
 
       {/* Header Bar */}
-      <header className="relative z-10 border-b border-slate-200 bg-white/95 backdrop-blur-md px-6 py-4 shadow-xs">
+      <header 
+        className="relative z-10 border-b border-slate-200 bg-white px-6 py-4 shadow-xs"
+        style={{ backgroundColor: '#ffffff', borderColor: '#e2e8f0' }}
+      >
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-blue-600 flex items-center justify-center text-white font-black shadow-md shadow-blue-600/20">

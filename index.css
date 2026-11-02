@@ -1,6 +1,11 @@
 @import "tailwindcss";
 
-body {
+:root {
+  color-scheme: light;
+}
+
+html, body {
+  color-scheme: light;
   font-family: 'Inter', sans-serif;
   background-color: #f1f5f9; /* Slate-100 */
   color: #0f172a; /* Slate-900 */

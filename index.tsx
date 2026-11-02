@@ -18,12 +18,9 @@ const App = () => {
   const [role, setRole] = useState<'TEACHER' | 'ADMIN' | null>(null);
   
   // Multi-School Portal Selection State
-  // When opening app fresh, user is presented with the School Portal
+  // Default to OTA Total Academy so user is immediately in their academy workspace
   const [selectedSchool, setSelectedSchool] = useState<School | null>(() => {
-    if (storage.isAdminLoggedIn() || storage.getLoggedInTeacherId()) {
-      return storage.getCurrentSchool();
-    }
-    return null;
+    return storage.getCurrentSchool();
   });
 
   // School Specific Loading States
