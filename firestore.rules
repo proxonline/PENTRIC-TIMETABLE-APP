@@ -35,22 +35,22 @@ service cloud.firestore {
 
     // Schools collection:
     // - Read: Public (to populate School Portal for lookup)
-    // - Create/Update: Validates schema and ID
-    // - Delete: Validates ID and prevents deletion of the default founding school
+    // - Client mutations: Strictly denied (server Admin SDK required)
     match /schools/{schoolId} {
       allow read: if true;
-      allow create, update: if isValidId(schoolId) && isValidSchool(incoming()) && incoming().id == schoolId;
-      allow delete: if isValidId(schoolId) && schoolId != 'ota_total_academy';
+      allow create, update, delete: if false;
     }
 
-    // Dynamic application sync collection for real-time cross-device sync:
+    // Dynamic application sync collection for server-authoritative storage:
+    // Client direct access denied - all reads and writes must pass through server-side authenticated APIs
     match /ota_app_store/{key} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
 
     // Cross-device Sync Diagnostics collection
+    // Client direct access denied
     match /ota_sync_diagnostics/{pingId} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
 
     // Default deny all unknown collections

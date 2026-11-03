@@ -8,11 +8,11 @@ import nodemailer from 'nodemailer';
 import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { ALL_SUBJECTS, ALL_CLASSES } from './constants';
-import { adminAuth, adminDb, clientDb, syncOtaStoreDocToFirestore, deleteOtaStoreDocFromFirestore, syncSchoolDocToFirestore, deleteSchoolDocFromFirestore } from './services/firebaseAdmin';
+import { adminAuth, adminDb, clientDb, syncOtaStoreDocToFirestore, deleteOtaStoreDocFromFirestore, syncSchoolDocToFirestore, deleteSchoolDocFromFirestore, hasAdminCredentials } from './services/firebaseAdmin';
 import { collection, getDocs, doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 if (process.env.NODE_ENV === 'production') {
   if (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'ota_smart_secret_key_2026') {
@@ -122,15 +122,54 @@ if (fs.existsSync(DATA_FILE)) {
 }
 
 let saveTimer: any = null;
-function saveStoreToDisk() {
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
+function saveStoreToDisk(immediate = false) {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  const writeNow = () => {
     try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
       fs.writeFileSync(DATA_FILE, JSON.stringify(store), 'utf-8');
     } catch (e) {
       console.error('Error writing store to disk:', e);
     }
-  }, 100);
+  };
+  if (immediate) {
+    writeNow();
+  } else {
+    saveTimer = setTimeout(writeNow, 50);
+  }
+}
+
+// Multi-instance disk synchronization watcher
+function checkAndSyncFromDisk() {
+  if (fs.existsSync(DATA_FILE)) {
+    try {
+      const raw = fs.readFileSync(DATA_FILE, 'utf-8');
+      const diskStore = JSON.parse(raw);
+      if (diskStore && diskStore.keys) {
+        const teachersChanged = JSON.stringify(diskStore.keys['ota_teachers_v3']) !== JSON.stringify(store.keys['ota_teachers_v3']);
+        const versionChanged = diskStore.version !== store.version;
+        if (versionChanged || teachersChanged) {
+          store = diskStore;
+          populateServerVaultFromMemory();
+          return true;
+        }
+      }
+    } catch {}
+  }
+  return false;
+}
+
+if (fs.existsSync(DATA_DIR)) {
+  fs.watchFile(DATA_FILE, { interval: 250 }, (curr, prev) => {
+    if (curr.mtimeMs > prev.mtimeMs) {
+      checkAndSyncFromDisk();
+    }
+  });
 }
 
 // --- ONE-TIME PASSWORD HASH MIGRATION & SEEDING ON SERVER START ---
@@ -145,9 +184,14 @@ function runPasswordMigration() {
     const adminList = Array.isArray(admins) ? admins : Object.values(admins);
     adminList.forEach((admin: any) => {
       admin.mustChangePassword = false;
-      if (admin && admin.password && !isBcrypt(admin.password)) {
-        admin.password = bcrypt.hashSync(admin.password, 10);
-        modified = true;
+      if (admin) {
+        if (!admin.password && (admin.username === 'admin' || admin.id === 'admin1')) {
+          admin.password = bcrypt.hashSync('admin123', 10);
+          modified = true;
+        } else if (admin.password && !isBcrypt(admin.password)) {
+          admin.password = bcrypt.hashSync(admin.password, 10);
+          modified = true;
+        }
       }
     });
   }
@@ -242,6 +286,7 @@ function seedDefaultStoreData() {
     adminList.forEach((a: any) => {
       if (a && (a.username === 'admin' || a.id === 'admin1')) {
         if (!a.adminEmail) a.adminEmail = 'oyalowoprox@gmail.com';
+        if (!a.password) a.password = bcrypt.hashSync('admin123', 10);
         a.mustChangePassword = false;
       }
     });
@@ -430,14 +475,45 @@ runPasswordMigration();
 seedDefaultStoreData();
 
 // --- ENCRYPTED SERVER CREDENTIALS VAULT FOR MULTI-CONTAINER AUTHENTICATION ---
-// AES-256-GCM encrypted with JWT_SECRET
+// Cryptographically isolated AES-256-GCM vault with dedicated 32-byte key independent of JWT_SECRET
+function getOrCreateVaultKey(): Buffer {
+  if (process.env.CREDENTIAL_VAULT_KEY) {
+    const raw = process.env.CREDENTIAL_VAULT_KEY.trim();
+    if (raw.length === 64 && /^[0-9a-fA-F]+$/.test(raw)) {
+      return Buffer.from(raw, 'hex');
+    }
+    return crypto.createHash('sha256').update(raw).digest();
+  }
+
+  const localKeyPath = path.join(DATA_DIR, '.vault_key.local');
+  if (fs.existsSync(localKeyPath)) {
+    try {
+      const stored = fs.readFileSync(localKeyPath, 'utf-8').trim();
+      if (stored.length === 64 && /^[0-9a-fA-F]+$/.test(stored)) {
+        return Buffer.from(stored, 'hex');
+      }
+    } catch {}
+  }
+
+  const generatedKey = crypto.randomBytes(32);
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(localKeyPath, generatedKey.toString('hex'), { mode: 0o600 });
+  } catch (err) {
+    console.warn('[Server Vault] Notice: persisting .vault_key.local skipped, using memory key:', err);
+  }
+  return generatedKey;
+}
+
+const CREDENTIAL_VAULT_KEY = getOrCreateVaultKey();
 const serverVault: Record<string, { passwordHash: string; role: string; email?: string; username?: string }> = {};
 
 function encryptVault(data: any): { iv: string; tag: string; encrypted: string } {
   try {
-    const key = crypto.createHash('sha256').update(JWT_SECRET).digest();
     const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const cipher = crypto.createCipheriv('aes-256-gcm', CREDENTIAL_VAULT_KEY, iv);
     let enc = cipher.update(JSON.stringify(data), 'utf8', 'hex');
     enc += cipher.final('hex');
     const tag = cipher.getAuthTag().toString('hex');
@@ -451,8 +527,7 @@ function encryptVault(data: any): { iv: string; tag: string; encrypted: string }
 function decryptVault(vaultData: { iv: string; tag: string; encrypted: string }): any {
   try {
     if (!vaultData || !vaultData.iv || !vaultData.tag || !vaultData.encrypted) return {};
-    const key = crypto.createHash('sha256').update(JWT_SECRET).digest();
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(vaultData.iv, 'hex'));
+    const decipher = crypto.createDecipheriv('aes-256-gcm', CREDENTIAL_VAULT_KEY, Buffer.from(vaultData.iv, 'hex'));
     decipher.setAuthTag(Buffer.from(vaultData.tag, 'hex'));
     let dec = decipher.update(vaultData.encrypted, 'hex', 'utf8');
     dec += decipher.final('utf8');
@@ -571,6 +646,37 @@ async function hydrateStoreFromFirestore() {
         });
 
         store.keys['ota_teachers_v3'] = localList;
+        return;
+      }
+
+      if (key === 'ota_admins') {
+        const remoteList = Array.isArray(data.payload) ? data.payload : Object.values(data.payload || {});
+        let localList = Array.isArray(store.keys['ota_admins']) ? store.keys['ota_admins'] : Object.values(store.keys['ota_admins'] || {});
+
+        remoteList.forEach((ra: any) => {
+          if (!ra || !ra.id) return;
+          const existingIdx = localList.findIndex((la: any) => la && (la.id === ra.id || la.username === ra.username));
+          if (existingIdx >= 0) {
+            const preservedPassword = localList[existingIdx].password;
+            localList[existingIdx] = { ...ra };
+            if (preservedPassword && !localList[existingIdx].password) {
+              localList[existingIdx].password = preservedPassword;
+            }
+          } else {
+            localList.push(ra);
+          }
+          modified = true;
+        });
+
+        // Ensure default admin password if somehow missing
+        localList.forEach((la: any) => {
+          if (la && (la.username === 'admin' || la.id === 'admin1') && !la.password) {
+            la.password = bcrypt.hashSync('admin123', 10);
+            modified = true;
+          }
+        });
+
+        store.keys['ota_admins'] = localList;
         return;
       }
 
@@ -854,26 +960,102 @@ app.post('/api/auth/admin-logout', (req, res) => {
   res.json({ success: true });
 });
 
+// Rate limiting map for login attempts: 5 failed attempts locks for 60 seconds
+interface LoginRateLimitEntry {
+  attempts: number;
+  firstAttemptAt: number;
+  lockedUntil: number;
+}
+const loginRateLimits = new Map<string, LoginRateLimitEntry>();
+
+function checkLoginRateLimit(key: string): { allowed: boolean; remainingLockMs?: number } {
+  const now = Date.now();
+  const entry = loginRateLimits.get(key);
+  if (!entry) return { allowed: true };
+
+  if (entry.lockedUntil > now) {
+    return { allowed: false, remainingLockMs: entry.lockedUntil - now };
+  }
+
+  // Sliding window of 60 seconds
+  if (now - entry.firstAttemptAt > 60000) {
+    loginRateLimits.delete(key);
+    return { allowed: true };
+  }
+
+  if (entry.attempts >= 5) {
+    entry.lockedUntil = now + 60000;
+    return { allowed: false, remainingLockMs: 60000 };
+  }
+
+  return { allowed: true };
+}
+
+function recordLoginFailure(key: string) {
+  const now = Date.now();
+  const entry = loginRateLimits.get(key);
+  if (!entry || (now - entry.firstAttemptAt > 60000)) {
+    loginRateLimits.set(key, { attempts: 1, firstAttemptAt: now, lockedUntil: 0 });
+  } else {
+    entry.attempts++;
+    if (entry.attempts >= 5) {
+      entry.lockedUntil = now + 60000;
+    }
+  }
+}
+
+function recordLoginSuccess(key: string) {
+  loginRateLimits.delete(key);
+}
+
 app.post('/api/auth/login', async (req, res) => {
   const { username, password, role } = req.body;
 
-  if (!username || !password) {
+  if (!username || typeof password === 'undefined') {
     return res.status(400).json({ success: false, error: 'Username and password are required' });
   }
 
-  const cleanUser = username.trim().toLowerCase();
-  const cleanPass = password.trim();
+  const cleanUser = String(username).trim().toLowerCase();
+  const rawPass = typeof password === 'string' ? password : String(password);
+
+  const ipKey = (req.headers['x-forwarded-for'] as string || req.socket.remoteAddress || 'ip').split(',')[0].trim();
+  const rateLimitKey = `${ipKey}_${cleanUser}`;
+  const rateLimit = checkLoginRateLimit(rateLimitKey);
+  if (!rateLimit.allowed) {
+    return res.status(429).json({
+      success: false,
+      code: 'RATE_LIMITED',
+      error: 'Too many attempts. Please wait before trying again.'
+    });
+  }
+
+  if (!store || !store.keys) {
+    return res.status(503).json({
+      success: false,
+      code: 'AUTH_DATA_UNAVAILABLE',
+      error: 'Authentication service is temporarily unavailable. Please try again.'
+    });
+  }
+
+  const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanUser);
 
   const checkPasswordMatch = (candidate: string, stored: string): boolean => {
     if (!stored) return false;
     if (/^\$2[aby]\$/.test(stored)) {
       try {
-        return bcrypt.compareSync(candidate, stored);
+        if (bcrypt.compareSync(candidate, stored)) return true;
+        // Backward compatibility for legacy accounts created under previous trimming bug
+        if (candidate !== candidate.trim() && bcrypt.compareSync(candidate.trim(), stored)) {
+          return true;
+        }
+        return false;
       } catch (e) {
         return false;
       }
     }
-    return candidate === stored;
+    if (candidate === stored) return true;
+    if (candidate !== candidate.trim() && candidate.trim() === stored) return true;
+    return false;
   };
 
   let customTokenErrorMsg: string | undefined;
@@ -891,68 +1073,52 @@ app.post('/api/auth/login', async (req, res) => {
   const adminsObj = store.keys['ota_admins'] || {};
   const adminList: any[] = Array.isArray(adminsObj) ? adminsObj : Object.values(adminsObj);
 
-  const matchedAdmin = adminList.find((a: any) => {
+  let matchedAdmin = adminList.find((a: any) => {
     if (!a) return false;
     const uName = (a.username || '').trim().toLowerCase();
-    const name = (a.name || '').trim().toLowerCase();
-    const id = (a.id || '').trim().toLowerCase();
     const aEmail = (a.adminEmail || a.email || a.contactEmail || '').trim().toLowerCase();
-    return uName === cleanUser || name === cleanUser || id === cleanUser || aEmail === cleanUser;
+    if (isEmail) {
+      return aEmail === cleanUser;
+    }
+    return uName === cleanUser;
   });
 
-  if (matchedAdmin) {
-    const adminVaultHash = serverVault[matchedAdmin.id]?.passwordHash;
-    const isPassValid = checkPasswordMatch(cleanPass, matchedAdmin.password) || 
-                        (adminVaultHash ? checkPasswordMatch(cleanPass, adminVaultHash) : false) ||
-                        cleanPass === 'admin123';
-
-    if (isPassValid) {
-      const NOW = Date.now();
-      const sessionToken = crypto.randomUUID();
-      activeAdminSession = {
-        adminId: matchedAdmin.id,
-        username: matchedAdmin.username || matchedAdmin.name,
-        sessionToken,
-        lastActive: NOW
-      };
-
-      if (!/^\$2[aby]\$/.test(matchedAdmin.password)) {
-        matchedAdmin.password = bcrypt.hashSync(cleanPass, 10);
-        saveStoreToDisk();
-      }
-
-      const mustChange = matchedAdmin.mustChangePassword === true && (cleanPass === 'admin123' || cleanPass === 'admin');
-      const userPayload = { ...matchedAdmin, role: 'ADMIN', mustChangePassword: mustChange };
-      const token = jwt.sign({ id: matchedAdmin.id, username: matchedAdmin.username || matchedAdmin.name, role: 'ADMIN', sessionToken }, JWT_SECRET, { expiresIn: '7d' });
-      const customToken = await getCustomFirebaseToken(matchedAdmin.id, 'ADMIN', matchedAdmin.username || matchedAdmin.name);
-
-      return res.json({
-        success: true,
-        token,
-        customToken,
-        customTokenError: customTokenErrorMsg,
-        role: 'ADMIN',
-        user: userPayload,
-        mustChangePassword: mustChange
-      });
-    }
-  }
-
-  // 2. Search in Teachers (with immediate Firestore live fallback for cross-container consistency)
+  // 2. Search in Teachers
   const teachersObj = store.keys['ota_teachers_v3'] || {};
   let teacherList: any[] = Array.isArray(teachersObj) ? [...teachersObj] : Object.values(teachersObj);
 
   let matchedTeacher = teacherList.find((t: any) => {
     if (!t) return false;
     const uName = (t.username || '').trim().toLowerCase();
-    const name = (t.name || '').trim().toLowerCase();
     const email = (t.contactEmail || t.email || '').trim().toLowerCase();
-    const id = (t.id || '').trim().toLowerCase();
-    return uName === cleanUser || name === cleanUser || email === cleanUser || id === cleanUser;
+    if (isEmail) {
+      return email === cleanUser;
+    }
+    return uName === cleanUser;
   });
 
-  // Cross-container self-healing: If not found in memory, directly pull latest teachers and server vault from Firestore
-  if (!matchedTeacher) {
+  // Cross-container self-healing: Check disk and Firestore for cross-instance consistency
+  if (!matchedAdmin && !matchedTeacher) {
+    if (checkAndSyncFromDisk()) {
+      const refreshedAdmins = Array.isArray(store.keys['ota_admins']) ? store.keys['ota_admins'] : Object.values(store.keys['ota_admins'] || {});
+      matchedAdmin = refreshedAdmins.find((a: any) => {
+        if (!a) return false;
+        const uName = (a.username || '').trim().toLowerCase();
+        const aEmail = (a.adminEmail || a.email || a.contactEmail || '').trim().toLowerCase();
+        return isEmail ? aEmail === cleanUser : uName === cleanUser;
+      });
+      const refreshedTeachers = Array.isArray(store.keys['ota_teachers_v3']) ? store.keys['ota_teachers_v3'] : Object.values(store.keys['ota_teachers_v3'] || {});
+      matchedTeacher = refreshedTeachers.find((t: any) => {
+        if (!t) return false;
+        const uName = (t.username || '').trim().toLowerCase();
+        const email = (t.contactEmail || t.email || '').trim().toLowerCase();
+        return isEmail ? email === cleanUser : uName === cleanUser;
+      });
+      teacherList = refreshedTeachers;
+    }
+  }
+
+  if (!matchedAdmin && !matchedTeacher) {
     try {
       const [teachersSnap, vaultSnap] = await Promise.all([
         getDoc(doc(clientDb, 'ota_app_store', 'ota_teachers_v3')),
@@ -969,7 +1135,7 @@ app.post('/api/auth/login', async (req, res) => {
       if (teachersSnap.exists() && teachersSnap.data()?.payload) {
         const remoteTeachers = teachersSnap.data().payload;
         const remoteList = Array.isArray(remoteTeachers) ? remoteTeachers : Object.values(remoteTeachers);
-        
+
         remoteList.forEach((rt: any) => {
           if (!rt || !rt.id) return;
           const idx = teacherList.findIndex((lt: any) => lt && (lt.id === rt.id || lt.username === rt.username));
@@ -979,8 +1145,15 @@ app.post('/api/auth/login', async (req, res) => {
             if (preservedPass && !teacherList[idx].password) {
               teacherList[idx].password = preservedPass;
             }
+            if (!teacherList[idx].password && serverVault[rt.id]?.passwordHash) {
+              teacherList[idx].password = serverVault[rt.id].passwordHash;
+            }
           } else {
-            teacherList.push(rt);
+            const newT = { ...rt };
+            if (serverVault[rt.id]?.passwordHash) {
+              newT.password = serverVault[rt.id].passwordHash;
+            }
+            teacherList.push(newT);
           }
         });
 
@@ -990,10 +1163,11 @@ app.post('/api/auth/login', async (req, res) => {
         matchedTeacher = teacherList.find((t: any) => {
           if (!t) return false;
           const uName = (t.username || '').trim().toLowerCase();
-          const name = (t.name || '').trim().toLowerCase();
           const email = (t.contactEmail || t.email || '').trim().toLowerCase();
-          const id = (t.id || '').trim().toLowerCase();
-          return uName === cleanUser || name === cleanUser || email === cleanUser || id === cleanUser;
+          if (isEmail) {
+            return email === cleanUser;
+          }
+          return uName === cleanUser;
         });
       }
     } catch (fsErr) {
@@ -1001,67 +1175,124 @@ app.post('/api/auth/login', async (req, res) => {
     }
   }
 
-  if (matchedTeacher) {
-    const vaultHash = serverVault[matchedTeacher.id]?.passwordHash;
-    const isTeacherPassValid = checkPasswordMatch(cleanPass, matchedTeacher.password) ||
-                               (vaultHash ? checkPasswordMatch(cleanPass, vaultHash) : false) ||
-                               cleanPass === 'password123';
+  // If no account exists anywhere
+  if (!matchedAdmin && !matchedTeacher) {
+    recordLoginFailure(rateLimitKey);
+    if (isEmail) {
+      return res.status(404).json({
+        success: false,
+        code: 'EMAIL_NOT_FOUND',
+        error: 'Email not found.'
+      });
+    }
+    return res.status(404).json({
+      success: false,
+      code: 'USERNAME_NOT_FOUND',
+      error: 'Username not found.'
+    });
+  }
 
-    if (isTeacherPassValid) {
-      if (!matchedTeacher.password || !/^\$2[aby]\$/.test(matchedTeacher.password)) {
-        matchedTeacher.password = bcrypt.hashSync(cleanPass, 10);
-        saveStoreToDisk();
-      }
-
-      // Anti-Imposter Check: Require Administrator Approval for new teacher accounts
-      if (matchedTeacher.isApproved === false || matchedTeacher.approvalStatus === 'PENDING') {
-        return res.status(403).json({
-          success: false,
-          isPendingApproval: true,
-          error: 'Verification Required: Your faculty account is currently awaiting school administrator verification. An administrator must confirm that you are official school faculty and not an imposter before you can log in.',
-          teacher: { id: matchedTeacher.id, name: matchedTeacher.name, username: matchedTeacher.username, schoolId: matchedTeacher.schoolId }
-        });
-      }
-
-      const mustChange = !!matchedTeacher.mustChangePassword;
-      const userPayload = sanitizeTeacherRecord(matchedTeacher, false);
-      const token = jwt.sign({ id: matchedTeacher.id, username: matchedTeacher.username || matchedTeacher.name, role: 'TEACHER' }, JWT_SECRET, { expiresIn: '7d' });
-      const customToken = await getCustomFirebaseToken(matchedTeacher.id, 'TEACHER', matchedTeacher.username || matchedTeacher.name);
-
-      return res.json({
-        success: true,
-        token,
-        customToken,
-        customTokenError: customTokenErrorMsg,
-        role: 'TEACHER',
-        user: userPayload,
-        mustChangePassword: mustChange
+  // Account exists. Check Role Mismatch
+  if (role) {
+    const requestedRole = String(role).toUpperCase();
+    if (matchedAdmin && requestedRole === 'TEACHER') {
+      recordLoginFailure(rateLimitKey);
+      return res.status(403).json({
+        success: false,
+        code: 'ROLE_MISMATCH',
+        error: 'This account belongs to an administrator. Select Administrator Login.'
+      });
+    }
+    if (matchedTeacher && requestedRole === 'ADMIN') {
+      recordLoginFailure(rateLimitKey);
+      return res.status(403).json({
+        success: false,
+        code: 'ROLE_MISMATCH',
+        error: 'This account belongs to a teacher. Select Teacher Login.'
       });
     }
   }
 
-  // 3. Emergency Default Admin Seeding & Login Fallback
-  if ((cleanUser === 'admin' || cleanUser === 'super admin' || cleanUser === 'oyalowoprox@gmail.com') && (cleanPass === 'admin123' || cleanPass === 'admin')) {
-    const defaultAdmin = {
-      id: 'admin1',
-      username: 'admin',
-      adminEmail: 'oyalowoprox@gmail.com',
-      password: bcrypt.hashSync(cleanPass, 10),
-      name: 'Super Admin',
-      tier: 'SUPER_ADMIN',
-      mustChangePassword: false,
-      role: 'ADMIN'
-    };
-    if (!store.keys['ota_admins']) store.keys['ota_admins'] = {};
-    if (Array.isArray(store.keys['ota_admins'])) {
-      store.keys['ota_admins'] = [defaultAdmin];
-    } else {
-      store.keys['ota_admins']['admin1'] = defaultAdmin;
+  // Check Teacher Account Status before credential verification
+  if (matchedTeacher) {
+    if (matchedTeacher.isDisabled === true || matchedTeacher.status === 'DISABLED') {
+      recordLoginFailure(rateLimitKey);
+      return res.status(403).json({
+        success: false,
+        code: 'ACCOUNT_DISABLED',
+        error: 'This account has been disabled. Contact your administrator.'
+      });
     }
-    saveStoreToDisk();
+    if (matchedTeacher.approvalStatus === 'REJECTED') {
+      recordLoginFailure(rateLimitKey);
+      return res.status(403).json({
+        success: false,
+        code: 'ACCOUNT_REJECTED',
+        error: 'Your teacher registration has been rejected. Contact your administrator.'
+      });
+    }
+  }
 
-    const token = jwt.sign({ id: defaultAdmin.id, username: defaultAdmin.username, role: 'ADMIN' }, JWT_SECRET, { expiresIn: '7d' });
-    const customToken = await getCustomFirebaseToken(defaultAdmin.id, 'ADMIN', defaultAdmin.username);
+  // Resolve stored credential from entity or server vault
+  const targetAccount = matchedAdmin || matchedTeacher;
+  const storedCredential = targetAccount.password || serverVault[targetAccount.id]?.passwordHash;
+
+  if (!storedCredential) {
+    recordLoginFailure(rateLimitKey);
+    return res.status(400).json({
+      success: false,
+      code: 'CREDENTIAL_MISSING',
+      error: 'Your account requires a password reset.'
+    });
+  }
+
+  const isPasswordCorrect = checkPasswordMatch(rawPass, storedCredential);
+  if (!isPasswordCorrect) {
+    recordLoginFailure(rateLimitKey);
+    return res.status(401).json({
+      success: false,
+      code: 'INVALID_PASSWORD',
+      error: 'Incorrect password.'
+    });
+  }
+
+  // Password is correct! Check pending approval for teachers
+  if (matchedTeacher) {
+    if (matchedTeacher.isApproved === false || matchedTeacher.approvalStatus === 'PENDING') {
+      return res.status(403).json({
+        success: false,
+        code: 'ACCOUNT_PENDING_APPROVAL',
+        isPendingApproval: true,
+        error: 'Your account is awaiting administrator approval.',
+        teacher: { id: matchedTeacher.id, name: matchedTeacher.name, username: matchedTeacher.username, schoolId: matchedTeacher.schoolId }
+      });
+    }
+  }
+
+  // Login successful: reset rate limit tracking
+  recordLoginSuccess(rateLimitKey);
+
+  // Upgrade unhashed passwords
+  if (!/^\$2[aby]\$/.test(targetAccount.password)) {
+    targetAccount.password = bcrypt.hashSync(rawPass, 10);
+    saveStoreToDisk();
+  }
+
+  if (matchedAdmin) {
+    const NOW = Date.now();
+    const sessionToken = crypto.randomUUID();
+    activeAdminSession = {
+      adminId: matchedAdmin.id,
+      username: matchedAdmin.username || matchedAdmin.name,
+      sessionToken,
+      lastActive: NOW
+    };
+
+    const mustChange = matchedAdmin.mustChangePassword === true;
+    const { password: _p, ...safeAdmin } = matchedAdmin;
+    const userPayload = { ...safeAdmin, role: 'ADMIN', mustChangePassword: mustChange };
+    const token = jwt.sign({ id: matchedAdmin.id, username: matchedAdmin.username || matchedAdmin.name, role: 'ADMIN', sessionToken }, JWT_SECRET, { expiresIn: '7d' });
+    const customToken = await getCustomFirebaseToken(matchedAdmin.id, 'ADMIN', matchedAdmin.username || matchedAdmin.name);
 
     return res.json({
       success: true,
@@ -1069,12 +1300,27 @@ app.post('/api/auth/login', async (req, res) => {
       customToken,
       customTokenError: customTokenErrorMsg,
       role: 'ADMIN',
-      user: defaultAdmin,
-      mustChangePassword: false
+      user: userPayload,
+      mustChangePassword: mustChange
     });
   }
 
-  return res.status(401).json({ success: false, error: 'Invalid username/email or password.' });
+  if (matchedTeacher) {
+    const mustChange = !!matchedTeacher.mustChangePassword;
+    const userPayload = sanitizeTeacherRecord(matchedTeacher, false);
+    const token = jwt.sign({ id: matchedTeacher.id, username: matchedTeacher.username || matchedTeacher.name, role: 'TEACHER' }, JWT_SECRET, { expiresIn: '7d' });
+    const customToken = await getCustomFirebaseToken(matchedTeacher.id, 'TEACHER', matchedTeacher.username || matchedTeacher.name);
+
+    return res.json({
+      success: true,
+      token,
+      customToken,
+      customTokenError: customTokenErrorMsg,
+      role: 'TEACHER',
+      user: userPayload,
+      mustChangePassword: mustChange
+    });
+  }
 });
 
 // --- ANTI-BOT EMAIL VERIFICATION INFRASTRUCTURE ---
@@ -1154,33 +1400,33 @@ function setupServerFirestoreListeners() {
         if (key === 'ota_teachers_v3') {
           const remoteList = Array.isArray(data.payload) ? data.payload : Object.values(data.payload || {});
           let localList = Array.isArray(store.keys['ota_teachers_v3']) ? store.keys['ota_teachers_v3'] : Object.values(store.keys['ota_teachers_v3'] || {});
-          let changed = false;
 
+          const reconciled: any[] = [];
           remoteList.forEach((rt: any) => {
             if (!rt || !rt.id) return;
-            const idx = localList.findIndex((lt: any) => lt && (lt.id === rt.id || lt.username === rt.username));
-            if (idx >= 0) {
-              const prevPass = localList[idx].password;
-              if (JSON.stringify(localList[idx]) !== JSON.stringify(rt)) {
-                localList[idx] = { ...rt };
-                if (prevPass && !localList[idx].password) {
-                  localList[idx].password = prevPass;
-                }
-                changed = true;
-              }
-            } else {
-              localList.push(rt);
-              changed = true;
+            const existing = localList.find((lt: any) => lt && (lt.id === rt.id || lt.username === rt.username));
+            const preservedPass = existing?.password;
+            const merged = { ...rt };
+            if (preservedPass && !merged.password) {
+              merged.password = preservedPass;
             }
+            if (!merged.password && serverVault[rt.id]?.passwordHash) {
+              merged.password = serverVault[rt.id].passwordHash;
+            }
+            reconciled.push(merged);
           });
 
-          if (changed) {
-            store.keys['ota_teachers_v3'] = localList;
+          const localIds = localList.map((t: any) => t?.id).sort().join(',');
+          const reconciledIds = reconciled.map((t: any) => t?.id).sort().join(',');
+          const hasChanged = localIds !== reconciledIds || JSON.stringify(localList) !== JSON.stringify(reconciled);
+
+          if (hasChanged) {
+            store.keys['ota_teachers_v3'] = reconciled;
             storeModified = true;
             broadcastToClients('update', {
               version: store.version,
               key: 'ota_teachers_v3',
-              changedKeys: { ota_teachers_v3: localList }
+              changedKeys: { ota_teachers_v3: reconciled }
             });
           }
           return;
@@ -1211,6 +1457,36 @@ function setupServerFirestoreListeners() {
 }
 
 setupServerFirestoreListeners();
+
+// System Readiness & Health Check Endpoint
+app.get('/api/ready', (req, res) => {
+  const adminsObj = store.keys['ota_admins'] || [];
+  const adminList = Array.isArray(adminsObj) ? adminsObj : Object.values(adminsObj);
+  const teachersObj = store.keys['ota_teachers_v3'] || [];
+  const teacherList = Array.isArray(teachersObj) ? teachersObj : Object.values(teachersObj);
+  const schoolsObj = store.keys['ota_schools_v1'] || [];
+  const schoolList = Array.isArray(schoolsObj) ? schoolsObj : Object.values(schoolsObj);
+
+  return res.json({
+    status: 'ready',
+    timestamp: Date.now(),
+    uptime: process.uptime(),
+    auth: {
+      adminAuthReady: !!adminAuth,
+      adminDbReady: !!adminDb,
+      hasServiceAccount: hasAdminCredentials
+    },
+    vault: {
+      vaultReady: true,
+      entriesCount: Object.keys(serverVault).length
+    },
+    records: {
+      adminsCount: adminList.length,
+      teachersCount: teacherList.length,
+      schoolsCount: schoolList.length
+    }
+  });
+});
 
 // Helper to construct a beautiful, modern, responsive HTML email template
 function buildEmailTemplate({
@@ -1556,16 +1832,16 @@ app.post('/api/notifications/send-email', async (req, res) => {
 // Mandatory Admin Password Change Endpoint (Hardened Security)
 app.post('/api/auth/change-admin-password', async (req, res) => {
   const { adminId, newPassword } = req.body;
-  if (!adminId || !newPassword) {
+  if (!adminId || typeof newPassword === 'undefined') {
     return res.status(400).json({ success: false, error: 'Administrator ID and new password are required.' });
   }
 
-  const cleanPass = String(newPassword).trim();
-  if (cleanPass.length < 8) {
+  const rawPass = typeof newPassword === 'string' ? newPassword : String(newPassword);
+  if (rawPass.length < 8) {
     return res.status(400).json({ success: false, error: 'Password must be at least 8 characters long.' });
   }
 
-  if (cleanPass === 'admin123' || cleanPass === 'admin' || cleanPass.toLowerCase() === 'password') {
+  if (rawPass === 'admin123' || rawPass === 'admin' || rawPass.toLowerCase() === 'password') {
     return res.status(400).json({ success: false, error: 'Security Violation: You cannot reuse the default insecure password.' });
   }
 
@@ -1577,10 +1853,17 @@ app.post('/api/auth/change-admin-password', async (req, res) => {
     return res.status(404).json({ success: false, error: 'Administrator account not found.' });
   }
 
-  const hashedPassword = bcrypt.hashSync(cleanPass, 10);
+  const hashedPassword = bcrypt.hashSync(rawPass, 10);
   adminList[idx].password = hashedPassword;
   adminList[idx].mustChangePassword = false;
   adminList[idx].updatedAt = Date.now();
+
+  serverVault[adminList[idx].id] = {
+    passwordHash: hashedPassword,
+    role: 'ADMIN',
+    email: (adminList[idx].adminEmail || adminList[idx].email || '').trim().toLowerCase(),
+    username: (adminList[idx].username || '').trim().toLowerCase()
+  };
 
   store.keys['ota_admins'] = adminList;
   store.version = Date.now();
@@ -1588,6 +1871,7 @@ app.post('/api/auth/change-admin-password', async (req, res) => {
 
   try {
     await syncOtaStoreDocToFirestore('ota_admins', adminList);
+    await syncOtaStoreDocToFirestore('ota_server_vault_v1', encryptVault(serverVault));
   } catch {}
 
   // Add audit log entry
@@ -1773,11 +2057,11 @@ app.post('/api/auth/signup', async (req, res) => {
 
   const cleanUser = String(username).trim().toLowerCase();
   const cleanName = String(name).trim();
-  const cleanPass = String(password).trim();
+  const rawPass = typeof password === 'string' ? password : String(password);
   const cleanEmail = String(email).trim().toLowerCase();
   const cleanCode = String(verificationCode).trim();
 
-  if (cleanPass.length < 4) {
+  if (rawPass.length < 4) {
     return res.status(400).json({ success: false, error: 'Password must be at least 4 characters long.' });
   }
 
@@ -1861,7 +2145,7 @@ app.post('/api/auth/signup', async (req, res) => {
     id: newTeacherId,
     name: cleanName,
     username: cleanUser,
-    password: bcrypt.hashSync(cleanPass, 10),
+    password: bcrypt.hashSync(rawPass, 10),
     recoveryCode,
     calendarToken,
     subjectsTaught: [],
@@ -1909,7 +2193,7 @@ app.post('/api/auth/signup', async (req, res) => {
   store.keys['ota_notifications_v2'] = notifList;
 
   store.version = Date.now();
-  saveStoreToDisk();
+  saveStoreToDisk(true);
 
   try {
     await syncTeachersAndVaultToFirestore(currentTeacherList);
@@ -2038,7 +2322,7 @@ app.post('/api/teachers/approve', requireAdmin, (req, res) => {
   }
 
   store.version = Date.now();
-  saveStoreToDisk();
+  saveStoreToDisk(true);
 
   const sanitized = getSanitizedKeys('ADMIN');
 
@@ -2199,28 +2483,30 @@ function verifyAdminRequest(req: express.Request, bodyPasskey?: string): { isAdm
     } catch {}
   }
 
-  // 2. Check admin credentials / passkey in body
+  // 2. Check admin credentials in body
   const adminUsername = req.body.adminUsername || req.body.username;
-  const adminPassword = req.body.adminPassword || req.body.password || bodyPasskey;
+  const adminPassword = req.body.adminPassword || req.body.password;
 
   if (adminUsername && adminPassword) {
     const cleanUser = String(adminUsername).trim().toLowerCase();
-    const cleanPass = String(adminPassword).trim();
+    const rawPass = typeof adminPassword === 'string' ? adminPassword : String(adminPassword);
     const adminsObj = store.keys['ota_admins'] || {};
     const adminList = Array.isArray(adminsObj) ? adminsObj : Object.values(adminsObj);
     const matchedAdmin = adminList.find((a: any) => {
       if (!a) return false;
       const u = (a.username || '').toLowerCase();
-      const n = (a.name || '').toLowerCase();
-      return u === cleanUser || n === cleanUser;
+      const em = (a.adminEmail || a.email || '').toLowerCase();
+      return u === cleanUser || em === cleanUser;
     });
     if (matchedAdmin) {
-      const stored = matchedAdmin.password || '';
+      const stored = matchedAdmin.password || serverVault[matchedAdmin.id]?.passwordHash || '';
       let match = false;
       if (/^\$2[aby]\$/.test(stored)) {
-        try { match = bcrypt.compareSync(cleanPass, stored); } catch {}
+        try {
+          match = bcrypt.compareSync(rawPass, stored) || (rawPass !== rawPass.trim() && bcrypt.compareSync(rawPass.trim(), stored));
+        } catch {}
       } else {
-        match = cleanPass === stored;
+        match = rawPass === stored || (rawPass !== rawPass.trim() && rawPass.trim() === stored);
       }
       if (match) {
         return { isAdmin: true, admin: matchedAdmin };
@@ -2228,31 +2514,7 @@ function verifyAdminRequest(req: express.Request, bodyPasskey?: string): { isAdm
     }
   }
 
-  // 3. Check standalone passkey or universal administrative authorization
-  if (bodyPasskey) {
-    const cleanPass = String(bodyPasskey).trim();
-    if (cleanPass === 'admin123' || cleanPass === '123prox321' || cleanPass === 'ADMIN_GATE' || cleanPass.length >= 4) {
-      return { isAdmin: true, admin: { username: 'admin', name: 'Authorized Administrator' } };
-    }
-    const adminsObj = store.keys['ota_admins'] || {};
-    const adminList = Array.isArray(adminsObj) ? adminsObj : Object.values(adminsObj);
-    for (const a of adminList) {
-      if (a && a.password) {
-        if (/^\$2[aby]\$/.test(a.password)) {
-          try {
-            if (bcrypt.compareSync(cleanPass, a.password)) {
-              return { isAdmin: true, admin: a };
-            }
-          } catch {}
-        } else if (cleanPass === a.password) {
-          return { isAdmin: true, admin: a };
-        }
-      }
-    }
-  }
-
-  // Allow registration of new institutions from the public portal
-  return { isAdmin: true, admin: { username: req.body?.adminUsername || 'admin', name: 'Institution Administrator' } };
+  return { isAdmin: false, error: 'Administrative Authorization Required.' };
 }
 
 // Schools API - Public Read for School Portal Lookup
@@ -2342,17 +2604,24 @@ app.post('/api/schools', async (req, res) => {
   }
 
   // Create school administrator account if credentials provided
-  if (adminUsername && adminPassword && String(adminPassword).trim().length >= 4) {
+  if (adminUsername && typeof adminPassword !== 'undefined' && String(adminPassword).length >= 4) {
+    const rawAdminPass = typeof adminPassword === 'string' ? adminPassword : String(adminPassword);
     const newAdminId = 'adm_' + cleanCode.toLowerCase() + '_' + Date.now().toString(36);
     const newAdmin = {
       id: newAdminId,
       username: String(adminUsername).trim().toLowerCase(),
-      password: bcrypt.hashSync(String(adminPassword).trim(), 10),
+      password: bcrypt.hashSync(rawAdminPass, 10),
       name: `${cleanName} Administrator`,
       role: 'ADMIN',
       tier: 'ADMIN',
       schoolId: schoolId,
       registeredAt: Date.now()
+    };
+    serverVault[newAdminId] = {
+      passwordHash: newAdmin.password,
+      role: 'ADMIN',
+      email: cleanEmail,
+      username: newAdmin.username
     };
     if (!store.keys['ota_admins']) store.keys['ota_admins'] = [];
     if (Array.isArray(store.keys['ota_admins'])) {
@@ -2465,47 +2734,84 @@ app.post('/api/auth/change-password', (req, res) => {
   }
 
   const { oldPassword, newPassword, adminId, role } = req.body;
-  if (!newPassword || newPassword.length < 4) {
+  if (typeof newPassword === 'undefined' || String(newPassword).length < 4) {
     return res.status(400).json({ success: false, error: 'New password must be at least 4 characters long' });
   }
 
+  const rawNewPass = typeof newPassword === 'string' ? newPassword : String(newPassword);
+  const rawOldPass = typeof oldPassword === 'string' ? oldPassword : (oldPassword ? String(oldPassword) : undefined);
+
   // 1. Admin Password Change
-  const isAdminRequest = decoded?.role === 'ADMIN' || role === 'ADMIN' || adminId === 'admin1' || !decoded;
+  const isAdminRequest = decoded?.role === 'ADMIN' || (role === 'ADMIN' && (decoded?.id || adminId));
   if (isAdminRequest) {
     const adminsObj = store.keys['ota_admins'] || {};
     const adminList = Array.isArray(adminsObj) ? adminsObj : Object.values(adminsObj);
     const targetId = decoded?.id || adminId || 'admin1';
-    const admin = adminList.find((a: any) => a.id === targetId || a.username === 'admin');
+    const admin = adminList.find((a: any) => a && (a.id === targetId || a.username === 'admin'));
     if (admin) {
-      if (oldPassword && !bcrypt.compareSync(oldPassword, admin.password) && oldPassword !== 'admin123') {
-        return res.status(400).json({ success: false, error: 'Current password does not match' });
+      if (rawOldPass) {
+        let oldMatch = false;
+        if (/^\$2[aby]\$/.test(admin.password)) {
+          try {
+            oldMatch = bcrypt.compareSync(rawOldPass, admin.password) || (rawOldPass !== rawOldPass.trim() && bcrypt.compareSync(rawOldPass.trim(), admin.password));
+          } catch {}
+        } else {
+          oldMatch = rawOldPass === admin.password || (rawOldPass !== rawOldPass.trim() && rawOldPass.trim() === admin.password);
+        }
+        if (!oldMatch) {
+          return res.status(400).json({ success: false, error: 'Current password does not match' });
+        }
       }
-      admin.password = bcrypt.hashSync(newPassword, 10);
+      admin.password = bcrypt.hashSync(rawNewPass, 10);
       admin.mustChangePassword = false;
+      serverVault[admin.id] = {
+        passwordHash: admin.password,
+        role: 'ADMIN',
+        email: (admin.adminEmail || admin.email || '').trim().toLowerCase(),
+        username: (admin.username || '').trim().toLowerCase()
+      };
       saveStoreToDisk();
       broadcastToClients('update', { key: 'ota_admins', keys: store.keys });
       try {
         syncOtaStoreDocToFirestore('ota_admins', store.keys['ota_admins']);
+        syncOtaStoreDocToFirestore('ota_server_vault_v1', encryptVault(serverVault));
       } catch {}
       return res.json({ success: true, message: 'Administrator password updated successfully' });
     }
   }
 
   // 2. Teacher Password Change
-  if (decoded?.role === 'TEACHER') {
+  if (decoded?.role === 'TEACHER' || role === 'TEACHER') {
     const teachersObj = store.keys['ota_teachers_v3'] || {};
     const teacherList = Array.isArray(teachersObj) ? teachersObj : Object.values(teachersObj);
-    const teacher = teacherList.find((t: any) => t.id === decoded.id);
+    const targetId = decoded?.id || req.body.id;
+    const teacher = teacherList.find((t: any) => t && t.id === targetId);
     if (teacher) {
-      if (oldPassword && teacher.password && !bcrypt.compareSync(oldPassword, teacher.password)) {
-        return res.status(400).json({ success: false, error: 'Current password does not match' });
+      if (rawOldPass && teacher.password) {
+        let oldMatch = false;
+        if (/^\$2[aby]\$/.test(teacher.password)) {
+          try {
+            oldMatch = bcrypt.compareSync(rawOldPass, teacher.password) || (rawOldPass !== rawOldPass.trim() && bcrypt.compareSync(rawOldPass.trim(), teacher.password));
+          } catch {}
+        } else {
+          oldMatch = rawOldPass === teacher.password || (rawOldPass !== rawOldPass.trim() && rawOldPass.trim() === teacher.password);
+        }
+        if (!oldMatch) {
+          return res.status(400).json({ success: false, error: 'Current password does not match' });
+        }
       }
-      teacher.password = bcrypt.hashSync(newPassword, 10);
+      teacher.password = bcrypt.hashSync(rawNewPass, 10);
       teacher.mustChangePassword = false;
+      serverVault[teacher.id] = {
+        passwordHash: teacher.password,
+        role: 'TEACHER',
+        email: (teacher.contactEmail || teacher.email || '').trim().toLowerCase(),
+        username: (teacher.username || '').trim().toLowerCase()
+      };
       saveStoreToDisk();
       broadcastToClients('update', { key: 'ota_teachers_v3', keys: store.keys });
       try {
-        syncOtaStoreDocToFirestore('ota_teachers_v3', store.keys['ota_teachers_v3']);
+        syncTeachersAndVaultToFirestore();
       } catch {}
       return res.json({ success: true, message: 'Password updated successfully' });
     }
@@ -3265,32 +3571,66 @@ app.post('/api/auth/recover-account', (req, res) => {
   return res.json({ success: true, teacherId: teacher.id, message: 'Recovery code verified.' });
 });
 
-app.post('/api/auth/reset-password-recovery', (req, res) => {
-  const { teacherId, recoveryCode, newPassword } = req.body;
-  if (!teacherId || !recoveryCode || !newPassword) {
+app.post('/api/auth/reset-password-recovery', async (req, res) => {
+  const { teacherId, adminId, recoveryCode, newPassword } = req.body;
+  const targetId = teacherId || adminId;
+  if (!targetId || !recoveryCode || typeof newPassword === 'undefined') {
     return res.status(400).json({ success: false, error: 'Missing required recovery parameters.' });
   }
 
-  const cleanPass = String(newPassword).trim();
-  if (cleanPass.length < 6) {
+  const rawPass = typeof newPassword === 'string' ? newPassword : String(newPassword);
+  if (rawPass.length < 6) {
     return res.status(400).json({ success: false, error: 'Password must be at least 6 characters.' });
   }
 
   const cleanCode = String(recoveryCode).trim().toUpperCase();
+
+  // 1. Check Teachers
   const teachersObj = store.keys['ota_teachers_v3'] || [];
   const teacherList: any[] = Array.isArray(teachersObj) ? teachersObj : Object.values(teachersObj);
-  const teacher = teacherList.find((t: any) => t && t.id === teacherId);
+  const teacher = teacherList.find((t: any) => t && t.id === targetId);
 
-  if (!teacher || !teacher.recoveryCode || teacher.recoveryCode.toUpperCase() !== cleanCode) {
-    return res.status(401).json({ success: false, error: 'Invalid recovery credentials.' });
+  if (teacher && teacher.recoveryCode && teacher.recoveryCode.toUpperCase() === cleanCode) {
+    teacher.password = bcrypt.hashSync(rawPass, 10);
+    teacher.recoveryCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+    teacher.mustChangePassword = false;
+    serverVault[teacher.id] = {
+      passwordHash: teacher.password,
+      role: 'TEACHER',
+      email: (teacher.contactEmail || teacher.email || '').trim().toLowerCase(),
+      username: (teacher.username || '').trim().toLowerCase()
+    };
+    saveStoreToDisk();
+    try {
+      await syncTeachersAndVaultToFirestore();
+    } catch {}
+    return res.json({ success: true, message: 'Password reset successful. You may now log in.' });
   }
 
-  teacher.password = bcrypt.hashSync(cleanPass, 10);
-  teacher.recoveryCode = crypto.randomBytes(4).toString('hex').toUpperCase();
-  teacher.mustChangePassword = false;
-  saveStoreToDisk();
+  // 2. Check Admins
+  const adminsObj = store.keys['ota_admins'] || [];
+  const adminList: any[] = Array.isArray(adminsObj) ? adminsObj : Object.values(adminsObj);
+  const admin = adminList.find((a: any) => a && (a.id === targetId || a.username === targetId));
 
-  return res.json({ success: true, message: 'Password reset successful. You may now log in.' });
+  if (admin && admin.recoveryCode && admin.recoveryCode.toUpperCase() === cleanCode) {
+    admin.password = bcrypt.hashSync(rawPass, 10);
+    admin.recoveryCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+    admin.mustChangePassword = false;
+    serverVault[admin.id] = {
+      passwordHash: admin.password,
+      role: 'ADMIN',
+      email: (admin.adminEmail || admin.email || '').trim().toLowerCase(),
+      username: (admin.username || '').trim().toLowerCase()
+    };
+    saveStoreToDisk();
+    try {
+      await syncOtaStoreDocToFirestore('ota_admins', adminList);
+      await syncOtaStoreDocToFirestore('ota_server_vault_v1', encryptVault(serverVault));
+    } catch {}
+    return res.json({ success: true, message: 'Password reset successful. You may now log in.' });
+  }
+
+  return res.status(401).json({ success: false, error: 'Invalid recovery credentials.' });
 });
 
 // Developer Endpoints for Recovery Code Escrow (Protected by Developer Master Key)
@@ -3666,13 +4006,13 @@ app.get('/api/developer/telemetry', (req, res) => {
 
 // Vite & Static file serving
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa'
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (process.env.NODE_ENV === 'production') {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.use((req, res, next) => {

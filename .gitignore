@@ -27,3 +27,11 @@ dist-ssr
 .env
 .env.*
 !.env.example
+
+# Runtime databases & stores (sensitive records, credentials, audit logs)
+data/
+*.local.json
+.checkpoint*/
+secrets/
+serviceAccountKey.json
+.aistudio/

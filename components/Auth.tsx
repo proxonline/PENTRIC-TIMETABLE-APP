@@ -93,7 +93,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
 
   // Step 1: Send 6-Digit Anti-Bot Verification Code to Email
   const handleSendVerificationCode = async (isResend = false) => {
-    if (!formData.name.trim() || !formData.email.trim() || !formData.username.trim() || !formData.password.trim()) {
+    if (!formData.name.trim() || !formData.email.trim() || !formData.username.trim() || !formData.password) {
       setError('Please fill in Full Name, Email, Username, and Password.');
       return;
     }
@@ -105,7 +105,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
       return;
     }
 
-    if (formData.password.trim().length < 4) {
+    if (formData.password.length < 4) {
       setError('Password must be at least 4 characters long.');
       return;
     }
@@ -162,7 +162,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
           name: formData.name.trim(),
           email: formData.email.trim().toLowerCase(),
           username: formData.username.trim().toLowerCase(),
-          password: formData.password.trim(),
+          password: formData.password,
           verificationCode: cleanCode,
           schoolId: currentSchool.id
         })
@@ -212,14 +212,32 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
         body: JSON.stringify({
           role: roleMode,
           username: formData.username.trim(),
-          password: formData.password.trim()
+          password: formData.password
         })
       });
 
       const data = await res.json();
       if (!res.ok) {
-        if (data.isPendingApproval || res.status === 403) {
-          setError(data.error || 'Verification Required: Your faculty account is currently awaiting school administrator verification. An administrator must confirm you are official school staff and not an imposter before you can log in.');
+        if (data.code === 'USERNAME_NOT_FOUND') {
+          setError('Username not found.');
+        } else if (data.code === 'EMAIL_NOT_FOUND') {
+          setError('Email not found.');
+        } else if (data.code === 'INVALID_PASSWORD') {
+          setError('Incorrect password.');
+        } else if (data.code === 'ROLE_MISMATCH') {
+          setError(data.error || (roleMode === 'ADMIN' ? 'This account belongs to a teacher. Select Teacher Login.' : 'This account belongs to an administrator. Select Administrator Login.'));
+        } else if (data.code === 'ACCOUNT_PENDING_APPROVAL' || data.isPendingApproval) {
+          setError('Your account is awaiting administrator approval.');
+        } else if (data.code === 'ACCOUNT_REJECTED') {
+          setError('Your teacher registration has been rejected. Contact your administrator.');
+        } else if (data.code === 'ACCOUNT_DISABLED') {
+          setError('This account has been disabled. Contact your administrator.');
+        } else if (data.code === 'CREDENTIAL_MISSING') {
+          setError('Your account requires a password reset.');
+        } else if (data.code === 'AUTH_DATA_UNAVAILABLE') {
+          setError('Authentication service is temporarily unavailable. Please try again.');
+        } else if (data.code === 'RATE_LIMITED') {
+          setError('Too many attempts. Please wait before trying again.');
         } else {
           setError(data.error || 'Invalid credentials.');
         }
@@ -244,26 +262,8 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, onSelectPublicView, onSwitc
 
       onLogin(data.user.role);
     } catch (e) {
-      // Fallback local check only for teachers if server un-contactable
-      const inputIdentifier = formData.username.trim().toLowerCase();
-
-      if (roleMode === 'TEACHER') {
-        const teachers = storage.getTeachers();
-        const teacher = teachers.find(t => 
-            (t.username?.trim().toLowerCase() === inputIdentifier || t.name?.trim().toLowerCase() === inputIdentifier)
-        );
-        if (teacher) {
-            if (teacher.isApproved === false || teacher.approvalStatus === 'PENDING') {
-              setError(`Verification Required: Your faculty account for ${currentSchool.name} is currently awaiting administrator verification to confirm you are genuine school staff and not an imposter.`);
-              setIsLoading(false);
-              return;
-            }
-            storage.setTeacherSession(teacher.id);
-            onLogin('TEACHER');
-            return;
-        }
-      }
-      setError('Unable to authenticate with server. Please try again.');
+      // Authoritative security: Fail closed on network failure, no offline credential bypass
+      setError('Unable to reach the authentication server. Check your internet connection and try again.');
     } finally {
       setIsLoading(false);
     }

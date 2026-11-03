@@ -93,28 +93,21 @@ try {
 }
 
 export const clientDb = clientDbInstance;
+export const hasAdminCredentials = !!credential;
 
 export async function syncOtaStoreDocToFirestore(key: string, payload: any): Promise<boolean> {
   try {
     const cleanPayload = JSON.parse(JSON.stringify(payload ?? null));
     const now = Date.now();
-    // Only attempt adminDb if an explicit service account credential was loaded
     if (credential && adminDb) {
-      try {
-        await adminDb.collection('ota_app_store').doc(key).set({
-          payload: cleanPayload,
-          updatedAt: now
-        });
-        return true;
-      } catch (adminErr) {
-        // Fallback to clientDb
-      }
+      await adminDb.collection('ota_app_store').doc(key).set({
+        payload: cleanPayload,
+        updatedAt: now
+      });
+      return true;
     }
-    await clientSetDoc(clientDoc(clientDb, 'ota_app_store', key), {
-      payload: cleanPayload,
-      updatedAt: now
-    });
-    return true;
+    // Fail closed: Protected collections require server Admin SDK authorization
+    return false;
   } catch (err) {
     console.warn(`[Firestore Cloud Sync] syncOtaStoreDocToFirestore(${key}) notice:`, err);
     return false;
@@ -124,15 +117,11 @@ export async function syncOtaStoreDocToFirestore(key: string, payload: any): Pro
 export async function deleteOtaStoreDocFromFirestore(key: string): Promise<boolean> {
   try {
     if (credential && adminDb) {
-      try {
-        await adminDb.collection('ota_app_store').doc(key).delete();
-        return true;
-      } catch (adminErr) {
-        // Fallback to clientDb
-      }
+      await adminDb.collection('ota_app_store').doc(key).delete();
+      return true;
     }
-    await clientDeleteDoc(clientDoc(clientDb, 'ota_app_store', key));
-    return true;
+    // Fail closed: Protected collections require server Admin SDK authorization
+    return false;
   } catch (err) {
     console.warn(`[Firestore Cloud Sync] deleteOtaStoreDocFromFirestore(${key}) notice:`, err);
     return false;
@@ -143,16 +132,12 @@ export async function syncSchoolDocToFirestore(school: any): Promise<boolean> {
   try {
     if (!school || !school.id) return false;
     const cleanSchool = JSON.parse(JSON.stringify(school));
-    if (adminDb) {
-      try {
-        await adminDb.collection('schools').doc(school.id).set(cleanSchool);
-        return true;
-      } catch (adminErr) {
-        // Fallback to clientDb
-      }
+    if (credential && adminDb) {
+      await adminDb.collection('schools').doc(school.id).set(cleanSchool);
+      return true;
     }
-    await clientSetDoc(clientDoc(clientDb, 'schools', school.id), cleanSchool);
-    return true;
+    // Fail closed: Protected collections require server Admin SDK authorization
+    return false;
   } catch (err) {
     console.info(`[Firestore Cloud Sync] syncSchoolDocToFirestore(${school?.id}) handled:`, err);
     return false;
@@ -162,16 +147,12 @@ export async function syncSchoolDocToFirestore(school: any): Promise<boolean> {
 export async function deleteSchoolDocFromFirestore(schoolId: string): Promise<boolean> {
   try {
     if (!schoolId) return false;
-    if (adminDb) {
-      try {
-        await adminDb.collection('schools').doc(schoolId).delete();
-        return true;
-      } catch (adminErr) {
-        // Fallback to clientDb
-      }
+    if (credential && adminDb) {
+      await adminDb.collection('schools').doc(schoolId).delete();
+      return true;
     }
-    await clientDeleteDoc(clientDoc(clientDb, 'schools', schoolId));
-    return true;
+    // Fail closed: Protected collections require server Admin SDK authorization
+    return false;
   } catch (err) {
     console.info(`[Firestore Cloud Sync] deleteSchoolDocFromFirestore(${schoolId}) handled:`, err);
     return false;

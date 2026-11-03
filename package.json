@@ -8,7 +8,7 @@
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "lint": "tsc --noEmit",
-    "test": "tsx scripts/test_regression.ts && tsx scripts/test_security_and_publication.ts",
+    "test": "tsx scripts/test_regression.ts && tsx scripts/test_security_and_publication.ts && tsx scripts/test_auth_full_matrix.ts && tsx scripts/test_multi_instance_sync.ts",
     "preview": "vite preview"
   },
   "dependencies": {

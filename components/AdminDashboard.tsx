@@ -289,28 +289,44 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
   const pendingTeachers = teachers.filter(t => t.isApproved === false || t.approvalStatus === 'PENDING');
 
   const handleApproveTeacher = async (teacherId: string) => {
-    storage.approveTeacher(teacherId, currentUser?.name || 'Administrator');
     try {
-      await fetch('/api/teachers/approve', {
+      const token = storage.getAuthToken();
+      const res = await fetch('/api/teachers/approve', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({
           teacherId,
           action: 'APPROVE',
           adminName: currentUser?.name || 'Administrator'
         })
       });
-    } catch {}
-    setTeachers(storage.getTeachers());
-    showToast('Teacher verified and approved! Imposter check cleared.', 'SUCCESS');
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error || 'Failed to approve faculty account.', 'ALERT');
+        return;
+      }
+
+      storage.approveTeacher(teacherId, currentUser?.name || 'Administrator');
+      setTeachers(storage.getTeachers());
+      showToast('Teacher verified and approved! Imposter check cleared.', 'SUCCESS');
+    } catch {
+      showToast('Network error: Unable to complete faculty verification.', 'ALERT');
+    }
   };
 
   const handleRejectTeacher = async (teacherId: string, reason?: string) => {
-    storage.rejectTeacher(teacherId, reason || 'Flagged as imposter / unverified', currentUser?.name || 'Administrator', true);
     try {
-      await fetch('/api/teachers/approve', {
+      const token = storage.getAuthToken();
+      const res = await fetch('/api/teachers/approve', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({
           teacherId,
           action: 'DELETE',
@@ -318,9 +334,19 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
           adminName: currentUser?.name || 'Administrator'
         })
       });
-    } catch {}
-    setTeachers(storage.getTeachers());
-    showToast('Flagged account removed. Imposter access denied.', 'ALERT');
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error || 'Failed to reject faculty account.', 'ALERT');
+        return;
+      }
+
+      storage.rejectTeacher(teacherId, reason || 'Flagged as imposter / unverified', currentUser?.name || 'Administrator', true);
+      setTeachers(storage.getTeachers());
+      showToast('Flagged account removed. Imposter access denied.', 'ALERT');
+    } catch {
+      showToast('Network error: Unable to complete faculty rejection.', 'ALERT');
+    }
   };
   
   // --- UPDATED CONFLICT STATE ---
