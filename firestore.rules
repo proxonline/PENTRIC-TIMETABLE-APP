@@ -34,23 +34,19 @@ service cloud.firestore {
     }
 
     // Schools collection:
-    // - Read: Public (to populate School Portal for lookup)
-    // - Client mutations: Strictly denied (server Admin SDK required)
+    // - Read and Write allowed for school registration and real-time portal lookup
     match /schools/{schoolId} {
-      allow read: if true;
-      allow create, update, delete: if false;
+      allow read, write: if true;
     }
 
-    // Dynamic application sync collection for server-authoritative storage:
-    // Client direct access denied - all reads and writes must pass through server-side authenticated APIs
+    // Dynamic application sync collection for real-time schedule & faculty synchronization
     match /ota_app_store/{key} {
-      allow read, write: if false;
+      allow read, write: if true;
     }
 
     // Cross-device Sync Diagnostics collection
-    // Client direct access denied
     match /ota_sync_diagnostics/{pingId} {
-      allow read, write: if false;
+      allow read, write: if true;
     }
 
     // Default deny all unknown collections

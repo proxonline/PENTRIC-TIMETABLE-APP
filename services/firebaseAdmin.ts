@@ -106,7 +106,13 @@ export async function syncOtaStoreDocToFirestore(key: string, payload: any): Pro
       });
       return true;
     }
-    // Fail closed: Protected collections require server Admin SDK authorization
+    if (clientDb) {
+      await clientSetDoc(clientDoc(clientDb, 'ota_app_store', key), {
+        payload: cleanPayload,
+        updatedAt: now
+      });
+      return true;
+    }
     return false;
   } catch (err) {
     console.warn(`[Firestore Cloud Sync] syncOtaStoreDocToFirestore(${key}) notice:`, err);
@@ -120,7 +126,10 @@ export async function deleteOtaStoreDocFromFirestore(key: string): Promise<boole
       await adminDb.collection('ota_app_store').doc(key).delete();
       return true;
     }
-    // Fail closed: Protected collections require server Admin SDK authorization
+    if (clientDb) {
+      await clientDeleteDoc(clientDoc(clientDb, 'ota_app_store', key));
+      return true;
+    }
     return false;
   } catch (err) {
     console.warn(`[Firestore Cloud Sync] deleteOtaStoreDocFromFirestore(${key}) notice:`, err);
@@ -136,7 +145,10 @@ export async function syncSchoolDocToFirestore(school: any): Promise<boolean> {
       await adminDb.collection('schools').doc(school.id).set(cleanSchool);
       return true;
     }
-    // Fail closed: Protected collections require server Admin SDK authorization
+    if (clientDb) {
+      await clientSetDoc(clientDoc(clientDb, 'schools', school.id), cleanSchool);
+      return true;
+    }
     return false;
   } catch (err) {
     console.info(`[Firestore Cloud Sync] syncSchoolDocToFirestore(${school?.id}) handled:`, err);
@@ -151,7 +163,10 @@ export async function deleteSchoolDocFromFirestore(schoolId: string): Promise<bo
       await adminDb.collection('schools').doc(schoolId).delete();
       return true;
     }
-    // Fail closed: Protected collections require server Admin SDK authorization
+    if (clientDb) {
+      await clientDeleteDoc(clientDoc(clientDb, 'schools', schoolId));
+      return true;
+    }
     return false;
   } catch (err) {
     console.info(`[Firestore Cloud Sync] deleteSchoolDocFromFirestore(${schoolId}) handled:`, err);

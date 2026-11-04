@@ -336,45 +336,31 @@ function seedDefaultStoreData() {
     modified = true;
   }
 
-  // 5. Ensure Teachers - Preserve and seed user verified faculty accounts
-  if (!store.keys['ota_teachers_v3'] || (Array.isArray(store.keys['ota_teachers_v3']) && store.keys['ota_teachers_v3'].length === 0)) {
-    const verifiedUserTeacher1 = {
-      id: 't_1793095260406_a8f1a4',
-      name: 'qq',
-      username: 'qq',
-      contactEmail: 'oyalowoprox@gmail.com',
-      schoolId: 'ota_total_academy',
-      password: bcrypt.hashSync('password123', 10),
-      isApproved: true,
-      approvalStatus: 'APPROVED',
-      mustChangePassword: false,
-      isCompleted: true,
-      department: 'Science',
-      subjectsTaught: ['math_jss'],
-      assignedClasses: ['JS1A'],
-      createdAt: 1793095260406
-    };
-    const verifiedUserTeacher2 = {
-      id: 't_1791395147321_sw4f',
-      name: 'Mr Oyalowo uthman',
-      username: 'mr oyalowo uthman',
-      contactEmail: 'oyalowoprox@gmail.com',
-      schoolId: 'ota_total_academy',
-      password: bcrypt.hashSync('password123', 10),
-      isApproved: true,
-      approvalStatus: 'APPROVED',
-      mustChangePassword: false,
-      isCompleted: true,
-      department: 'Academics',
-      subjectsTaught: ['math_jss', 'eng_jss'],
-      assignedClasses: ['JS1A', 'JS1B'],
-      createdAt: 1791395147321
-    };
-    store.keys['ota_teachers_v3'] = [verifiedUserTeacher1, verifiedUserTeacher2];
+  // 5. Ensure Teachers - Strictly NO fake or hardcoded teachers!
+  if (!store.keys['ota_teachers_v3']) {
+    store.keys['ota_teachers_v3'] = [];
     modified = true;
   } else if (!Array.isArray(store.keys['ota_teachers_v3'])) {
     store.keys['ota_teachers_v3'] = Object.values(store.keys['ota_teachers_v3']);
     modified = true;
+  }
+
+  // Purge any fake, mock, or automated test teachers
+  if (Array.isArray(store.keys['ota_teachers_v3'])) {
+    const originalCount = store.keys['ota_teachers_v3'].length;
+    store.keys['ota_teachers_v3'] = store.keys['ota_teachers_v3'].filter((t: any) => {
+      if (!t) return false;
+      const uname = (t.username || '').toLowerCase();
+      const name = (t.name || '').toLowerCase();
+      if (uname === 'qq' || name === 'qq') return false;
+      if (uname.startsWith('sync_') || name.includes('alan turing')) return false;
+      if (uname.startsWith('matrix_') || name.includes('matrix faculty')) return false;
+      if (t.id === 't_1793095260406_a8f1a4' || t.id === 't_1793633708715_af1a80') return false;
+      return true;
+    });
+    if (store.keys['ota_teachers_v3'].length !== originalCount) {
+      modified = true;
+    }
   }
 
   // 6. Ensure Settings
@@ -2400,6 +2386,60 @@ app.delete('/api/teachers/:id', requireAdmin, (req, res) => {
 
   console.log(`[Teacher Deleted] Permanent deletion completed for teacher ID ${teacherId}`);
   return res.json({ success: true, teacherId, message: 'Teacher permanently removed from faculty and timetable.' });
+});
+
+// Clear All Teachers Endpoint
+app.post('/api/teachers/clear-all', requireAdmin, async (req, res) => {
+  store.keys['ota_teachers_v3'] = [];
+
+  // Scrub all teacher assignments from timetable
+  const timetable = store.keys['ota_timetable_v2'];
+  if (timetable && typeof timetable === 'object') {
+    for (const classId in timetable) {
+      const days = timetable[classId];
+      if (!days || typeof days !== 'object') continue;
+      for (const day in days) {
+        const periods = days[day];
+        if (!periods || typeof periods !== 'object') continue;
+        for (const period in periods) {
+          const cell = periods[period];
+          if (cell && cell.teacherId && cell.teacherId !== 'SYSTEM') {
+            cell.teacherId = '';
+            cell.teacherIds = [];
+          }
+        }
+      }
+    }
+  }
+
+  // Clear teacher credentials from serverVault
+  for (const vKey of Object.keys(serverVault)) {
+    if (serverVault[vKey]?.role === 'TEACHER') {
+      delete serverVault[vKey];
+    }
+  }
+
+  store.version = Date.now();
+  saveStoreToDisk(true);
+
+  try {
+    await syncTeachersAndVaultToFirestore([]);
+    await syncOtaStoreDocToFirestore('ota_timetable_v2', store.keys['ota_timetable_v2']);
+  } catch (err) {}
+
+  const sanitized = getSanitizedKeys('ADMIN');
+
+  broadcastToClients('update', {
+    version: store.version,
+    key: 'ota_teachers_v3',
+    changedKeys: {
+      ota_teachers_v3: [],
+      ota_timetable_v2: sanitized['ota_timetable_v2']
+    }
+  });
+
+  console.log('[Teachers] Clear all completed: all faculty records wiped.');
+  return res.json({ success: true, message: 'All teachers successfully cleared.' });
 });
 
 // Dedicated Teacher Profile & Picture Update Endpoint

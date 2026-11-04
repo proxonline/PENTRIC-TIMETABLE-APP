@@ -323,8 +323,15 @@ class CloudSync {
             const evtSource = new EventSource(sseUrl);
             this.sseSource = evtSource;
 
+            evtSource.onopen = () => {
+                this.isConnected = true;
+                this.connectionListeners.forEach(l => l(true));
+            };
+
             evtSource.addEventListener('init', (e: MessageEvent) => {
                 try {
+                    this.isConnected = true;
+                    this.connectionListeners.forEach(l => l(true));
                     const data = JSON.parse(e.data);
                     if (data && data.version && data.keys) {
                         this.serverSyncVersion = data.version;
@@ -335,6 +342,8 @@ class CloudSync {
             });
             evtSource.addEventListener('update', (e: MessageEvent) => {
                 try {
+                    this.isConnected = true;
+                    this.connectionListeners.forEach(l => l(true));
                     const data = JSON.parse(e.data);
                     if (data && data.version) {
                         this.serverSyncVersion = Math.max(this.serverSyncVersion, data.version);
@@ -378,6 +387,10 @@ class CloudSync {
                 if (token) headers['Authorization'] = `Bearer ${token}`;
                 const res = await fetch(`/api/sync/state?v=${this.serverSyncVersion}`, { headers });
                 if (res.ok) {
+                    if (!this.isConnected) {
+                        this.isConnected = true;
+                        this.connectionListeners.forEach(l => l(true));
+                    }
                     const data = await res.json();
                     if (data && data.unchanged) {
                         return;
@@ -510,6 +523,10 @@ class CloudSync {
             const reqVersion = (forceFull || !hasTimetable) ? 0 : this.serverSyncVersion;
             const res = await fetch(`/api/sync/state?v=${reqVersion}`);
             if (res.ok) {
+                if (!this.isConnected) {
+                    this.isConnected = true;
+                    this.connectionListeners.forEach(l => l(true));
+                }
                 const data = await res.json();
                 if (data && data.version) {
                     this.serverSyncVersion = Math.max(this.serverSyncVersion, data.version);
@@ -935,8 +952,17 @@ export const storage = {
     let teachers: Teacher[] = safeParseArray<Teacher>(data, []);
     if (!teachers) teachers = [];
 
-    // Filter out deleted/tombstoned teachers
-    teachers = teachers.filter(t => t && t.id && !deletedIds.includes(t.id));
+    // Filter out deleted/tombstoned teachers and fake/test teachers
+    teachers = teachers.filter(t => {
+      if (!t || !t.id || deletedIds.includes(t.id)) return false;
+      const uname = (t.username || '').toLowerCase();
+      const name = (t.name || '').toLowerCase();
+      if (uname === 'qq' || name === 'qq') return false;
+      if (uname.startsWith('sync_') || name.includes('alan turing')) return false;
+      if (uname.startsWith('matrix_') || name.includes('matrix faculty')) return false;
+      if (t.id === 't_1793095260406_a8f1a4' || t.id === 't_1793633708715_af1a80') return false;
+      return true;
+    });
 
     let modified = false;
     teachers.forEach(t => {
@@ -1038,7 +1064,20 @@ export const storage = {
     cloud.pushUpdates(updates);
   },
 
+  clearAllTeachers: () => {
+    const teachers = storage.getTeachers();
+    teachers.forEach(t => storage.scrubTeacherFromLocalTimetable(t.id));
+    localStorage.setItem(KEYS.TEACHERS, JSON.stringify([]));
+    cloud.pushUpdates({ [KEYS.TEACHERS]: [] });
+    cloud.pushItem(KEYS.TEACHERS, 'all', []);
+    cloud.notify(true);
+  },
+
   saveTeachers: (newTeachers: Teacher[]) => {
+    if (newTeachers.length === 0) {
+      storage.clearAllTeachers();
+      return;
+    }
     const teachers = storage.getTeachers();
     const updates: Record<string, any> = {};
     
@@ -1066,7 +1105,10 @@ export const storage = {
     localStorage.setItem(KEYS.TEACHERS, JSON.stringify(updated));
     storage.scrubTeacherFromLocalTimetable(id);
     if (typeof window !== 'undefined') {
-      fetch(`/api/teachers/${id}`, { method: 'DELETE' }).catch(() => {});
+      const token = localStorage.getItem(KEYS.AUTH_TOKEN);
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      fetch(`/api/teachers/${id}`, { method: 'DELETE', headers }).catch(() => {});
     }
     cloud.deleteItem(KEYS.TEACHERS, id);
   },

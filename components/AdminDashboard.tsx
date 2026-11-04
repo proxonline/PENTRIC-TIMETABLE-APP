@@ -1246,7 +1246,15 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
   const handleClearTeachers = async () => {
     setIsClearing(true);
     try {
-      storage.saveTeachers([]);
+      const token = storage.getAuthToken();
+      await fetch('/api/teachers/clear-all', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        }
+      });
+      storage.clearAllTeachers();
       showToast('All teachers cleared', 'SUCCESS');
       loadData();
     } catch (error) {
