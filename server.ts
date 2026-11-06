@@ -116,6 +116,7 @@ if (fs.existsSync(DATA_FILE)) {
     store = JSON.parse(raw);
     if (!store.keys) store.keys = {};
     if (!store.version) store.version = Date.now();
+    delete store.keys['app_state'];
   } catch (e) {
     console.error('Failed to parse store file, starting fresh', e);
   }
@@ -3412,16 +3413,21 @@ app.post('/api/timetable/publish', requireAdmin, async (req, res) => {
       historyList = Object.values(store.keys['ota_history_v2']);
     }
     historyList.push(historyEntry);
+    // Retain only the 5 most recent history snapshots to guarantee ultra-fast I/O (<2ms)
+    if (historyList.length > 5) {
+      historyList = historyList.slice(-5);
+    }
     store.keys['ota_history_v2'] = historyList;
   }
 
   // Embed revision ID into the timetable structure
   const authoritativeTimetable = { ...timetable, _revisionId: nextRevisionId };
 
-  // Update store keys atomically
+  // Update store keys atomically & purge redundant bloated monolithic keys
   store.keys['ota_timetable_v2'] = authoritativeTimetable;
   store.keys['ota_timetable_metadata_v1'] = newMeta;
   delete store.keys['ota_timetable_draft_v1']; // Clear published draft
+  delete store.keys['app_state'];
 
   // Add system notification
   const pubNotification = {

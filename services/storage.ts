@@ -1423,7 +1423,7 @@ export const storage = {
       deleteDoc(doc(db, 'ota_app_store', KEYS.TIMETABLE_DRAFT)).catch(() => {});
     } catch {}
 
-    cloud.notify(true);
+    cloud.notify(false);
     return canonicalMeta;
   },
 

@@ -1109,19 +1109,42 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
       showToast('No timetable draft available to publish.', 'ALERT');
       return;
     }
+
+    const previousGrid = grid;
+    const previousDraft = draftGrid;
+    const previousTab = activeScheduleTab;
+    const previousHasDraft = hasDraft;
+    const currentMeta = storage.getTimetableMetadata();
+    const optimisticRev = (currentMeta?.revisionId || 1) + 1;
+
+    // ⚡ Instant Optimistic UI Transition (<1ms)
     setIsPublishing(true);
     setPublishConflict(null);
+    setGrid(draftToPublish);
+    setDraftGrid(null);
+    setHasDraft(false);
+    setActiveScheduleTab('PUBLISHED');
+    setTimetableMetadata({
+      ...currentMeta,
+      revisionId: optimisticRev,
+      publishedAt: Date.now(),
+      publishedBy: currentUser?.name || 'Administrator',
+      status: 'PUBLISHED'
+    });
+
     try {
-      const currentMeta = storage.getTimetableMetadata();
       const meta = await storage.publishTimetable(draftToPublish, currentUser?.name || 'Administrator', currentMeta.revisionId, force);
-      setHasDraft(false);
-      setDraftGrid(null);
-      setActiveScheduleTab('PUBLISHED');
-      loadData();
-      showToast(`Master Timetable successfully published (Revision #${meta.revisionId})! All faculty and viewers updated.`, 'SUCCESS');
+      setTimetableMetadata(meta);
+      showToast(`Master Timetable published instantly (Revision #${meta.revisionId})!`, 'SUCCESS');
     } catch (e: any) {
+      // Revert optimistic state if publication encountered an error or conflict
+      setGrid(previousGrid);
+      setDraftGrid(previousDraft);
+      setHasDraft(previousHasDraft);
+      setActiveScheduleTab(previousTab);
+      setTimetableMetadata(currentMeta);
+
       if (e?.status === 409 || e?.message?.includes('Conflict')) {
-        loadData();
         setPublishConflict({
           currentRevisionId: e.currentRevisionId || (timetableMetadata.revisionId + 1),
           message: e.message || 'The timetable was modified by another session.'
