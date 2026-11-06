@@ -97,7 +97,15 @@ export const hasAdminCredentials = !!credential;
 
 export async function syncOtaStoreDocToFirestore(key: string, payload: any): Promise<boolean> {
   try {
-    const cleanPayload = JSON.parse(JSON.stringify(payload ?? null));
+    let cleanPayload = JSON.parse(JSON.stringify(payload ?? null));
+    if (key === 'app_state' && cleanPayload && typeof cleanPayload === 'object' && cleanPayload.keys) {
+      // Prevent 1MB limit exceed: individual documents store timetables & history authoritatively
+      const shallowKeys = { ...cleanPayload.keys };
+      delete shallowKeys.ota_timetable_v2;
+      delete shallowKeys.ota_timetable_published_v2;
+      delete shallowKeys.ota_history_v2;
+      cleanPayload = { ...cleanPayload, keys: shallowKeys };
+    }
     const now = Date.now();
     if (credential && adminDb) {
       await adminDb.collection('ota_app_store').doc(key).set({

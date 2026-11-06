@@ -120,6 +120,7 @@ async function runAuthMatrixTests() {
   const testUsername = `matrix_${Date.now().toString(36)}`;
   const rawSpacedPassword = '   SecretWithSpaces2026!   ';
   let teacherId = '';
+  let adminToken = '';
 
   try {
     // Request verification code
@@ -200,7 +201,7 @@ async function runAuthMatrixTests() {
     });
     const adminData = await adminLogin.json();
     assert.strictEqual(adminLogin.status, 200);
-    const adminToken = adminData.token;
+    adminToken = adminData.token;
 
     const approveRes = await fetch(`${BASE_URL}/api/teachers/approve`, {
       method: 'POST',
@@ -307,6 +308,15 @@ async function runAuthMatrixTests() {
     pass('Sliding window rate limit returns 429 RATE_LIMITED ("Too many attempts. Please wait before trying again.")');
   } catch (e: any) {
     fail('Rate limit test failed', e);
+  } finally {
+    if (adminToken && teacherId) {
+      try {
+        await fetch(`${BASE_URL}/api/teachers/${teacherId}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${adminToken}` }
+        });
+      } catch {}
+    }
   }
 
   console.log('\n=====================================================');

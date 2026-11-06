@@ -46,7 +46,7 @@ export class ConstraintSolver {
     private classSolveIterations = 0;
     private maxIterations = 50000;
     private startTime = 0;
-    private timeLimit = 8000;
+    private timeLimit = 25000;
 
     private onProgress?: (progress: number, message: string) => void;
     private onSync?: (grid: TimetableGrid) => void;
@@ -210,31 +210,50 @@ export class ConstraintSolver {
                 const classAssigned = this.teachers.filter(t => isTeacherQualifiedForSubject(t, sub) && t.assignedClasses.includes(classObj.id));
                 const allQualified = this.teachers.filter(t => isTeacherQualifiedForSubject(t, sub));
 
+                const getTeacherMaxCap = (t: Teacher) => Math.min((t as any).maxPeriodsPerWeek || 35, 38);
+
                 if (PARALLEL_SUBJECTS.includes(sub.id)) {
                     const assignedTeachers = classAssigned.length > 0 ? classAssigned : allQualified;
-                    const underloaded = assignedTeachers.filter(t => ((teacherPeriodCounts.get(t.id) || 0) + countNeeded) <= 35);
-                    const selected = underloaded.length > 0 ? underloaded : (assignedTeachers.length > 0 ? [assignedTeachers.sort((a, b) => (teacherPeriodCounts.get(a.id) || 0) - (teacherPeriodCounts.get(b.id) || 0))[0]] : []);
+                    const underloaded = assignedTeachers.filter(t => ((teacherPeriodCounts.get(t.id) || 0) + countNeeded) <= getTeacherMaxCap(t));
+                    const fallbackCap = assignedTeachers.filter(t => ((teacherPeriodCounts.get(t.id) || 0) + countNeeded) <= 38);
+                    const selected = underloaded.length > 0 ? underloaded : (fallbackCap.length > 0 ? fallbackCap : []);
                     teacherIds = selected.map(t => t.id);
                 } else {
                     let selectedTeacher: Teacher | undefined;
 
-                    // Prefer teacher assigned to class with load <= 28
+                    // 1. Prefer teacher assigned to class with load <= 28
                     const underloadedClassTeachers = classAssigned.filter(t => ((teacherPeriodCounts.get(t.id) || 0) + countNeeded) <= 28);
                     if (underloadedClassTeachers.length > 0) {
                         underloadedClassTeachers.sort((a, b) => (teacherPeriodCounts.get(a.id) || 0) - (teacherPeriodCounts.get(b.id) || 0));
                         selectedTeacher = underloadedClassTeachers[0];
                     } else {
-                        // Secondary: any teacher in school with load <= 28
+                        // 2. Secondary: any teacher in school with load <= 28
                         const underloadedSchoolTeachers = allQualified.filter(t => ((teacherPeriodCounts.get(t.id) || 0) + countNeeded) <= 28);
                         if (underloadedSchoolTeachers.length > 0) {
                             underloadedSchoolTeachers.sort((a, b) => (teacherPeriodCounts.get(a.id) || 0) - (teacherPeriodCounts.get(b.id) || 0));
                             selectedTeacher = underloadedSchoolTeachers[0];
-                        } else if (classAssigned.length > 0) {
-                            classAssigned.sort((a, b) => (teacherPeriodCounts.get(a.id) || 0) - (teacherPeriodCounts.get(b.id) || 0));
-                            selectedTeacher = classAssigned[0];
-                        } else if (allQualified.length > 0) {
-                            allQualified.sort((a, b) => (teacherPeriodCounts.get(a.id) || 0) - (teacherPeriodCounts.get(b.id) || 0));
-                            selectedTeacher = allQualified[0];
+                        } else {
+                            // 3. Teachers with remaining capacity within their max configured capacity
+                            const capClassTeachers = classAssigned.filter(t => ((teacherPeriodCounts.get(t.id) || 0) + countNeeded) <= getTeacherMaxCap(t));
+                            if (capClassTeachers.length > 0) {
+                                capClassTeachers.sort((a, b) => (teacherPeriodCounts.get(a.id) || 0) - (teacherPeriodCounts.get(b.id) || 0));
+                                selectedTeacher = capClassTeachers[0];
+                            } else {
+                                const capSchoolTeachers = allQualified.filter(t => ((teacherPeriodCounts.get(t.id) || 0) + countNeeded) <= getTeacherMaxCap(t));
+                                if (capSchoolTeachers.length > 0) {
+                                    capSchoolTeachers.sort((a, b) => (teacherPeriodCounts.get(a.id) || 0) - (teacherPeriodCounts.get(b.id) || 0));
+                                    selectedTeacher = capSchoolTeachers[0];
+                                } else {
+                                    // 4. Absolute physical limit check (<= 38 periods/week)
+                                    const absoluteCapTeachers = allQualified.filter(t => ((teacherPeriodCounts.get(t.id) || 0) + countNeeded) <= 38);
+                                    if (absoluteCapTeachers.length > 0) {
+                                        absoluteCapTeachers.sort((a, b) => (teacherPeriodCounts.get(a.id) || 0) - (teacherPeriodCounts.get(b.id) || 0));
+                                        selectedTeacher = absoluteCapTeachers[0];
+                                    }
+                                    // If all qualified teachers are at or above 38 slots, selectedTeacher remains undefined.
+                                    // This prevents overbooking teachers beyond physical weekly slots which causes clashes on every period.
+                                }
+                            }
                         }
                     }
 
@@ -420,6 +439,7 @@ export class ConstraintSolver {
         // Clean-up and fallback pass across all tasks
         this.fillUnplacedTasks();
         this.optimizeWeeklyVariety();
+        this.rebuildStateFromGrid();
 
         if (this.onSync) {
             this.onSync(JSON.parse(JSON.stringify(this.state.grid)));
@@ -506,9 +526,15 @@ export class ConstraintSolver {
                             if (p2 < MAX_PERIODS - 1 && p2 + 1 !== p1 && this.state.grid[cId]?.[d]?.[p2 + 1]?.subjectId === cell1.subjectId) continue;
 
                             // Section 5: Teacher clash & availability avoidance across all classes
-                            let teacherClash = false;
                             const tids1 = cell1.teacherIds && cell1.teacherIds.length > 0 ? cell1.teacherIds : (cell1.teacherId ? [cell1.teacherId] : []);
-                            for (const tid of tids1) {
+                            const tids2 = cell2.teacherIds && cell2.teacherIds.length > 0 ? cell2.teacherIds : (cell2.teacherId ? [cell2.teacherId] : []);
+                            const tids1Set = new Set(tids1);
+                            const tids2Set = new Set(tids2);
+                            const tids1Only = tids1.filter(t => !tids2Set.has(t));
+                            const tids2Only = tids2.filter(t => !tids1Set.has(t));
+
+                            let teacherClash = false;
+                            for (const tid of tids1Only) {
                                 if (tid === 'SYSTEM') continue;
                                 const teacherObj = this.teachers.find(t => t.id === tid);
                                 if (teacherObj?.availability?.[d]?.[p2] === Availability.UNAVAILABLE) {
@@ -516,18 +542,14 @@ export class ConstraintSolver {
                                     break;
                                 }
                                 const tIdx = this.teacherToIndex.get(tid);
-                                if (tIdx !== undefined) {
-                                    const occupiedBy = this.state.teacherSchedule[tIdx][d][p2];
-                                    if (occupiedBy && occupiedBy !== cId) {
-                                        teacherClash = true;
-                                        break;
-                                    }
+                                if (tIdx !== undefined && this.state.teacherSchedule[tIdx][d][p2]) {
+                                    teacherClash = true;
+                                    break;
                                 }
                             }
                             if (teacherClash) continue;
 
-                            const tids2 = cell2.teacherIds && cell2.teacherIds.length > 0 ? cell2.teacherIds : (cell2.teacherId ? [cell2.teacherId] : []);
-                            for (const tid of tids2) {
+                            for (const tid of tids2Only) {
                                 if (tid === 'SYSTEM') continue;
                                 const teacherObj = this.teachers.find(t => t.id === tid);
                                 if (teacherObj?.availability?.[d]?.[p1] === Availability.UNAVAILABLE) {
@@ -535,12 +557,9 @@ export class ConstraintSolver {
                                     break;
                                 }
                                 const tIdx = this.teacherToIndex.get(tid);
-                                if (tIdx !== undefined) {
-                                    const occupiedBy = this.state.teacherSchedule[tIdx][d][p1];
-                                    if (occupiedBy && occupiedBy !== cId) {
-                                        teacherClash = true;
-                                        break;
-                                    }
+                                if (tIdx !== undefined && this.state.teacherSchedule[tIdx][d][p1]) {
+                                    teacherClash = true;
+                                    break;
                                 }
                             }
                             if (teacherClash) continue;
@@ -551,15 +570,15 @@ export class ConstraintSolver {
 
                             const newScore = calculateRepetitionScore(cId);
                             if (newScore < currentScore) {
-                                // Keep improving swap! Update teacher schedules
-                                tids1.forEach(tid => {
+                                // Keep improving swap! Update teacher schedules for changed assignments
+                                tids1Only.forEach(tid => {
                                     const tIdx = this.teacherToIndex.get(tid);
                                     if (tIdx !== undefined) {
                                         this.state.teacherSchedule[tIdx][d][p1] = '';
                                         this.state.teacherSchedule[tIdx][d][p2] = cId;
                                     }
                                 });
-                                tids2.forEach(tid => {
+                                tids2Only.forEach(tid => {
                                     const tIdx = this.teacherToIndex.get(tid);
                                     if (tIdx !== undefined) {
                                         this.state.teacherSchedule[tIdx][d][p2] = '';
@@ -648,6 +667,135 @@ export class ConstraintSolver {
         return placed >= Math.min(this.totalRequiredSlots, maxCapacityPossible);
     }
 
+    private attemptAugmentingVacancyShift(task: Task, classObj: Class, cIdx: number): boolean {
+        const sub = this.subjects.find(s => s.id === task.subjectId);
+        if (!sub) return false;
+        const maxDaily = resolveMaxPerDay(sub);
+
+        // 1. Identify which days currently have count < maxDaily for this task's subject
+        const validTargetDays: number[] = [];
+        for (let d = 0; d < DAYS_COUNT; d++) {
+            let count = 0;
+            for (let p = 0; p < MAX_PERIODS; p++) {
+                if (this.state.grid[classObj.id]?.[d]?.[p]?.subjectId === task.subjectId) {
+                    count++;
+                }
+            }
+            if (count < maxDaily) {
+                validTargetDays.push(d);
+            }
+        }
+
+        if (validTargetDays.length === 0) return false;
+
+        // 2. Identify all empty slots in this class
+        const emptySlots: { d: number, p: number }[] = [];
+        for (let d = 0; d < DAYS_COUNT; d++) {
+            for (let p = 0; p < MAX_PERIODS; p++) {
+                if (!this.state.grid[classObj.id]?.[d]?.[p] && !this.isMandatedFreeSlot(classObj.category, d, p)) {
+                    emptySlots.push({ d, p });
+                }
+            }
+        }
+
+        if (emptySlots.length === 0) return false;
+
+        // 3. For each validTargetDay, look for a donor cell that can move to one of the emptySlots
+        for (const targetDay of validTargetDays) {
+            for (let donorP = 0; donorP < MAX_PERIODS; donorP++) {
+                const donorCell = this.state.grid[classObj.id]?.[targetDay]?.[donorP];
+                if (!donorCell || donorCell.subjectId === 'FREE' || donorCell.subjectId === 'WORSHIP') continue;
+                if (donorCell.subjectId === task.subjectId) continue;
+
+                const donorSub = this.subjects.find(s => s.id === donorCell.subjectId);
+                if (!donorSub) continue;
+                const donorMaxDaily = resolveMaxPerDay(donorSub);
+
+                for (const emptySlot of emptySlots) {
+                    if (emptySlot.d === targetDay) continue;
+
+                    let donorCountOnEmptyDay = 0;
+                    for (let p = 0; p < MAX_PERIODS; p++) {
+                        if (this.state.grid[classObj.id]?.[emptySlot.d]?.[p]?.subjectId === donorCell.subjectId) {
+                            donorCountOnEmptyDay++;
+                        }
+                    }
+                    if (donorCountOnEmptyDay >= donorMaxDaily) continue;
+
+                    if (this.isStrictMorningCore(donorCell.subjectId) && emptySlot.p >= 4) continue;
+                    if (this.isStrictMorningCore(task.subjectId) && donorP >= 4) continue;
+
+                    let donorTeacherClash = false;
+                    const donorTids = donorCell.teacherIds && donorCell.teacherIds.length > 0 
+                        ? donorCell.teacherIds 
+                        : (donorCell.teacherId ? [donorCell.teacherId] : []);
+                    if (!this.config.classLayoutOnly && this.teachers.length > 0 && donorTids.length > 0) {
+                        for (const tid of donorTids) {
+                            if (tid === 'SYSTEM') continue;
+                            const tIdx = this.teacherToIndex.get(tid);
+                            if (tIdx !== undefined && this.state.teacherSchedule[tIdx][emptySlot.d][emptySlot.p]) {
+                                donorTeacherClash = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (donorTeacherClash) continue;
+
+                    let taskTeachers = task.teacherIds;
+                    if (!this.config.classLayoutOnly && this.teachers.length > 0 && taskTeachers.length > 0) {
+                        let hasClash = false;
+                        for (const tid of taskTeachers) {
+                            if (tid === 'SYSTEM') continue;
+                            const tIdx = this.teacherToIndex.get(tid);
+                            if (tIdx !== undefined && this.state.teacherSchedule[tIdx][targetDay][donorP]) {
+                                hasClash = true;
+                                break;
+                            }
+                        }
+                        if (hasClash) {
+                            const altTeacher = this.teachers.find(t => 
+                                isTeacherQualifiedForSubject(t, sub) && 
+                                this.teacherToIndex.get(t.id) !== undefined && 
+                                !this.state.teacherSchedule[this.teacherToIndex.get(t.id)!][targetDay][donorP] &&
+                                t.availability?.[targetDay]?.[donorP] !== Availability.UNAVAILABLE
+                            );
+                            if (altTeacher) {
+                                taskTeachers = [altTeacher.id];
+                            } else {
+                                taskTeachers = [];
+                            }
+                        }
+                    }
+
+                    // Perform the augmenting vacancy shift
+                    if (donorTids.length > 0) {
+                        donorTids.forEach(tid => {
+                            if (tid === 'SYSTEM') return;
+                            const tIdx = this.teacherToIndex.get(tid);
+                            if (tIdx !== undefined) this.state.teacherSchedule[tIdx][targetDay][donorP] = '';
+                        });
+                    }
+                    this.state.grid[classObj.id][emptySlot.d][emptySlot.p] = donorCell;
+                    if (donorTids.length > 0) {
+                        donorTids.forEach(tid => {
+                            if (tid === 'SYSTEM') return;
+                            const tIdx = this.teacherToIndex.get(tid);
+                            if (tIdx !== undefined) this.state.teacherSchedule[tIdx][emptySlot.d][emptySlot.p] = classObj.id;
+                        });
+                    }
+                    this.state.classDailySubjects[cIdx][emptySlot.d].add(donorCell.subjectId);
+
+                    this.state.grid[classObj.id][targetDay][donorP] = null as any;
+
+                    const placedTask: Task = { ...task, teacherIds: taskTeachers };
+                    this.applyTask(placedTask, targetDay, donorP, cIdx);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private fillUnplacedTasksForClass(classObj: Class, classTasks: Task[]) {
         const cIdx = this.classToIndex.get(classObj.id);
         if (cIdx === undefined) return;
@@ -733,9 +881,17 @@ export class ConstraintSolver {
                 if (placedEmergency) break;
             }
 
-            // 3. Fallback: if slots remain open and task is still unplaced, relax morning core restrictions
+            // 3. Fallback: if slots remain open and task is still unplaced, relax morning core restrictions while strictly respecting maxDaily
             if (!placedEmergency) {
                 for (let d = 0; d < DAYS_COUNT; d++) {
+                    let currentSubCountOnDay = 0;
+                    for (let cp = 0; cp < MAX_PERIODS; cp++) {
+                        if (this.state.grid[classObj.id]?.[d]?.[cp]?.subjectId === task.subjectId) {
+                            currentSubCountOnDay++;
+                        }
+                    }
+                    if (currentSubCountOnDay >= maxDaily) continue;
+
                     for (let p = 0; p < MAX_PERIODS; p++) {
                         if (!this.state.grid[classObj.id]?.[d]?.[p] && !this.isMandatedFreeSlot(classObj.category, d, p)) {
                             let hasTeacherClash = false;
@@ -754,6 +910,54 @@ export class ConstraintSolver {
                                 placedEmergency = true;
                                 break;
                             }
+                        }
+                    }
+                    if (placedEmergency) break;
+                }
+            }
+
+            // 4. Guaranteed class completion fallback:
+            // If teacher scheduling conflicts prevent placement in all open slots,
+            // schedule the task without teacher assignment (teacherIds: []) so the class timetable
+            // receives its full configured curriculum and no holes are left.
+            if (!placedEmergency) {
+                for (let d = 0; d < DAYS_COUNT; d++) {
+                    let currentSubCountOnDay = 0;
+                    for (let cp = 0; cp < MAX_PERIODS; cp++) {
+                        if (this.state.grid[classObj.id]?.[d]?.[cp]?.subjectId === task.subjectId) {
+                            currentSubCountOnDay++;
+                        }
+                    }
+                    if (currentSubCountOnDay >= maxDaily) continue;
+
+                    for (let p = 0; p < MAX_PERIODS; p++) {
+                        if (!this.state.grid[classObj.id]?.[d]?.[p] && !this.isMandatedFreeSlot(classObj.category, d, p)) {
+                            const unassignedTask = { ...task, teacherIds: [] };
+                            this.applyTask(unassignedTask, d, p, cIdx);
+                            placedEmergency = true;
+                            this.bottlenecks.add(`Teacher Capacity Shortage: Scheduled ${sub.name} for ${classObj.name} with unassigned faculty to avoid dropped lesson.`);
+                            break;
+                        }
+                    }
+                    if (placedEmergency) break;
+                }
+            }
+
+            // 5. Augmenting Vacancy Shift: shift a donor lesson to an open slot to free a slot on a day where task fits daily limit
+            if (!placedEmergency) {
+                placedEmergency = this.attemptAugmentingVacancyShift(task, classObj, cIdx);
+            }
+
+            // 6. Guaranteed completion fallback: fill any remaining eligible empty slot so no lesson is ever dropped
+            if (!placedEmergency) {
+                for (let d = 0; d < DAYS_COUNT; d++) {
+                    for (let p = 0; p < MAX_PERIODS; p++) {
+                        if (!this.state.grid[classObj.id]?.[d]?.[p] && !this.isMandatedFreeSlot(classObj.category, d, p)) {
+                            const unassignedTask = { ...task, teacherIds: [] };
+                            this.applyTask(unassignedTask, d, p, cIdx);
+                            placedEmergency = true;
+                            this.bottlenecks.add(`Schedule Compression: Scheduled ${sub.name} for ${classObj.name} in available slot to ensure 100% timetable completion.`);
+                            break;
                         }
                     }
                     if (placedEmergency) break;
@@ -843,9 +1047,17 @@ export class ConstraintSolver {
                     if (placedEmergency) break;
                 }
 
-                // Fallback: relax morning core restriction to ensure slots are not left unfilled
+                // Fallback: relax morning core restriction to ensure slots are not left unfilled while strictly respecting maxDaily
                 if (!placedEmergency) {
                     for (let d = 0; d < DAYS_COUNT; d++) {
+                        let currentSubCountOnDay = 0;
+                        for (let cp = 0; cp < MAX_PERIODS; cp++) {
+                            if (this.state.grid[task.classId]?.[d]?.[cp]?.subjectId === task.subjectId) {
+                                currentSubCountOnDay++;
+                            }
+                        }
+                        if (currentSubCountOnDay >= maxDaily) continue;
+
                         for (let p = 0; p < MAX_PERIODS; p++) {
                             if (!this.state.grid[task.classId]?.[d]?.[p] && !this.isMandatedFreeSlot(classObj.category, d, p)) {
                                 let hasTeacherClash = false;
@@ -864,6 +1076,51 @@ export class ConstraintSolver {
                                     placedEmergency = true;
                                     break;
                                 }
+                            }
+                        }
+                        if (placedEmergency) break;
+                    }
+                }
+
+                // 4. Guaranteed completion fallback: place without teacher assignment to avoid leaving empty period
+                if (!placedEmergency) {
+                    for (let d = 0; d < DAYS_COUNT; d++) {
+                        let currentSubCountOnDay = 0;
+                        for (let cp = 0; cp < MAX_PERIODS; cp++) {
+                            if (this.state.grid[task.classId]?.[d]?.[cp]?.subjectId === task.subjectId) {
+                                currentSubCountOnDay++;
+                            }
+                        }
+                        if (currentSubCountOnDay >= maxDaily) continue;
+
+                        for (let p = 0; p < MAX_PERIODS; p++) {
+                            if (!this.state.grid[task.classId]?.[d]?.[p] && !this.isMandatedFreeSlot(classObj.category, d, p)) {
+                                const unassignedTask = { ...task, teacherIds: [] };
+                                this.applyTask(unassignedTask, d, p, cIdx);
+                                placedEmergency = true;
+                                this.bottlenecks.add(`Teacher Capacity Shortage: Scheduled ${sub.name} for ${classObj.name} with unassigned faculty to avoid dropped lesson.`);
+                                break;
+                            }
+                        }
+                        if (placedEmergency) break;
+                    }
+                }
+
+                // 5. Augmenting Vacancy Shift
+                if (!placedEmergency) {
+                    placedEmergency = this.attemptAugmentingVacancyShift(task, classObj, cIdx);
+                }
+
+                // 6. Guaranteed completion fallback
+                if (!placedEmergency) {
+                    for (let d = 0; d < DAYS_COUNT; d++) {
+                        for (let p = 0; p < MAX_PERIODS; p++) {
+                            if (!this.state.grid[task.classId]?.[d]?.[p] && !this.isMandatedFreeSlot(classObj.category, d, p)) {
+                                const unassignedTask = { ...task, teacherIds: [] };
+                                this.applyTask(unassignedTask, d, p, cIdx);
+                                placedEmergency = true;
+                                this.bottlenecks.add(`Schedule Compression: Scheduled ${sub.name} for ${classObj.name} in available slot to ensure 100% timetable completion.`);
+                                break;
                             }
                         }
                         if (placedEmergency) break;

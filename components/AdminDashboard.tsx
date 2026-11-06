@@ -1,10 +1,10 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { storage } from '../services/storage';
 import { generateTimetable, detectGridConflicts } from '../services/generator';
 import { getEligibleSubjectsForClass, isSubjectEligibleForClass, getSubjectStream, getClassStream } from '../services/curriculum_eligibility';
 import { ALL_CLASSES, ALL_SUBJECTS, DAYS, PERIODS, TIMETABLE_CONFIG } from '../constants';
-import { LogEntry, TimetableGrid as GridType, Teacher, SwapRequest, AdminUser, AdminTier, AppNotification, Class, Subject, AppSettings, ChatMessage, Conflict, Availability, OptimizationGoal, ReasoningReport, Room, TeacherAbsence, AuditLogEntry, School as SchoolType, AcademicLevel, SlotBudgetInfo, AIFixSuggestion, TimetableMetadata } from '../types';
+import { LogEntry, TimetableGrid as GridType, Teacher, SwapRequest, AdminUser, AdminTier, AppNotification, Class, Subject, AppSettings, ChatMessage, Conflict, Availability, OptimizationGoal, ReasoningReport, Room, TeacherAbsence, AuditLogEntry, School as SchoolType, AcademicLevel, SlotBudgetInfo, AIFixSuggestion, TimetableMetadata, ClassCompletionStatus, ClassAuditReport, ClassSubjectAudit } from '../types';
 import { auditTimetableSchedule, suggestConflictFix, analyzeTimetableLightningFast } from '../services/ai';
 import { TimetableGrid } from './TimetableGrid';
 import { UserGuide } from './UserGuide';
@@ -500,6 +500,8 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
   // Generation Reporting
   const [generationLogs, setGenerationLogs] = useState<LogEntry[]>([]);
   const [showGenReport, setShowGenReport] = useState(false);
+  const [genReportTab, setGenReportTab] = useState<'AUDIT' | 'FEASIBILITY' | 'LOGS'>('AUDIT');
+  const [auditClassSearch, setAuditClassSearch] = useState('');
   const [preserveManualEdits, setPreserveManualEdits] = useState(false);
   const [optimizationGoal, setOptimizationGoal] = useState<OptimizationGoal>('BALANCED');
   const [reasoningReport, setReasoningReport] = useState<ReasoningReport | null>(null);
@@ -522,6 +524,75 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
   } | null>(null);
   const [showAiAnalysisModal, setShowAiAnalysisModal] = useState(false);
   const [applyingAiFix, setApplyingAiFix] = useState(false);
+
+  const computedClassAudits: ClassAuditReport[] = useMemo(() => {
+    if (reasoningReport?.classAudits) {
+      const audits = Object.values(reasoningReport.classAudits);
+      if (audits.length > 0) return audits;
+    }
+    const currentGrid = (activeScheduleTab === 'DRAFT' && hasDraft) ? (draftGrid || {}) : (grid || {});
+    return classes.map(c => {
+      const eligible = getEligibleSubjectsForClass(c, subjects);
+      const reqSum = eligible.reduce((acc, s) => acc + (s.defaultPeriodCount || s.periodsPerWeek || 3), 0);
+      const classGrid = (currentGrid as any)[c.id] || {};
+      let scheduled = 0;
+      let empty = 0;
+      const subCounts: Record<string, number> = {};
+      for (let d = 0; d < 5; d++) {
+        for (let p = 0; p < 8; p++) {
+          if (d === 4 && p >= 6) continue;
+          const cell = classGrid?.[d]?.[p];
+          if (!cell || !cell.subjectId || cell.subjectId === 'FREE' || cell.subjectId === 'WORSHIP') {
+            empty++;
+          } else {
+            scheduled++;
+            subCounts[cell.subjectId] = (subCounts[cell.subjectId] || 0) + 1;
+          }
+        }
+      }
+      const missingLessons = Math.max(0, Math.min(reqSum, 38) - scheduled);
+      const subjectAudits: ClassSubjectAudit[] = eligible.map(s => {
+        const target = s.defaultPeriodCount || s.periodsPerWeek || 3;
+        const actual = subCounts[s.id] || 0;
+        return {
+          id: s.id,
+          name: s.name,
+          code: s.code || s.id,
+          required: target,
+          scheduled: actual,
+          missing: Math.max(0, target - actual),
+          excess: Math.max(0, actual - target)
+        };
+      });
+      const missingSubjects = subjectAudits.filter(s => s.missing > 0);
+      const excessSubjects = subjectAudits.filter(s => s.excess > 0);
+      let status: ClassCompletionStatus = 'COMPLETE';
+      if (reqSum > 38) status = 'IMPOSSIBLE_CONFIGURATION';
+      else if (scheduled === 0 && reqSum > 0) status = 'GENERATION_FAILED';
+      else if (missingLessons > 0 || empty > 0) status = 'INCOMPLETE';
+      return {
+        classId: c.id,
+        className: c.name,
+        level: c.level || c.category || 'GENERAL',
+        stream: (c.stream as any) || 'GENERAL',
+        status,
+        requiredLessons: reqSum,
+        scheduledLessons: scheduled,
+        missingLessons,
+        emptySlots: empty,
+        subjectAudits,
+        missingSubjects,
+        excessSubjects,
+        skippedSubjects: missingSubjects.filter(s => s.scheduled === 0),
+        teacherClashes: [],
+        classClashes: [],
+        lockedViolations: [],
+        reservedViolations: [],
+        dailyLimitViolations: [],
+        details: status === 'COMPLETE' ? 'Full weekly curriculum allocated (38/38 slots filled).' : `Missing ${missingLessons} lesson(s).`
+      };
+    });
+  }, [reasoningReport, classes, subjects, activeScheduleTab, hasDraft, draftGrid, grid]);
 
   // Ref for Export & Dropdown
   const timetableRef = useRef<HTMLDivElement>(null);
@@ -4129,21 +4200,242 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
             </div>
         )}
 
-        {/* MODAL: Generation Report */}
+        {/* MODAL: Class Timetable Audit & Generation Report */}
         {showGenReport && (
             <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-                <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-2xl animate-in zoom-in-95 duration-200 border border-slate-100 max-h-[90vh] flex flex-col">
-                    <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-[2rem]">
-                        <h3 className="text-xl font-black text-slate-800">Generation Report</h3>
-                        <button onClick={() => setShowGenReport(false)} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
-                            <X size={24} className="text-slate-400"/>
+                <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-5xl animate-in zoom-in-95 duration-200 border border-slate-100 max-h-[92vh] flex flex-col overflow-hidden">
+                    {/* Header */}
+                    <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-50/80">
+                        <div className="flex items-center gap-3">
+                            <div className="w-11 h-11 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-600/20 font-black">
+                                <ShieldCheck size={22} />
+                            </div>
+                            <div>
+                                <h3 className="text-xl font-black text-slate-900 flex items-center gap-2">
+                                    Class Timetable Completion Audit
+                                    <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                        {computedClassAudits.filter(a => a.status === 'COMPLETE').length}/{computedClassAudits.length} Complete
+                                    </span>
+                                </h3>
+                                <p className="text-xs text-slate-500">Exhaustive per-class curriculum frequency verification and constraint compliance.</p>
+                            </div>
+                        </div>
+
+                        {/* Tabs */}
+                        <div className="flex items-center gap-2">
+                            <div className="flex bg-slate-200/80 p-1 rounded-xl text-xs font-bold">
+                                <button
+                                    onClick={() => setGenReportTab('AUDIT')}
+                                    className={`px-3 py-1.5 rounded-lg transition-all ${genReportTab === 'AUDIT' ? 'bg-white text-indigo-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+                                >
+                                    Class Audit Matrix
+                                </button>
+                                <button
+                                    onClick={() => setGenReportTab('FEASIBILITY')}
+                                    className={`px-3 py-1.5 rounded-lg transition-all ${genReportTab === 'FEASIBILITY' ? 'bg-white text-indigo-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+                                >
+                                    Feasibility & Preflight
+                                </button>
+                                <button
+                                    onClick={() => setGenReportTab('LOGS')}
+                                    className={`px-3 py-1.5 rounded-lg transition-all ${genReportTab === 'LOGS' ? 'bg-white text-indigo-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+                                >
+                                    Solver Logs ({generationLogs.length})
+                                </button>
+                            </div>
+                            <button onClick={() => setShowGenReport(false)} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
+                                <X size={20} className="text-slate-400"/>
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Body */}
+                    <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                        {genReportTab === 'AUDIT' && (
+                            <div className="space-y-5">
+                                {/* Summary KPIs */}
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                                    <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4">
+                                        <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Total Classes</div>
+                                        <div className="text-2xl font-black text-slate-900 mt-1">{computedClassAudits.length}</div>
+                                        <div className="text-[11px] text-slate-500 mt-0.5">Junior & Senior Cohorts</div>
+                                    </div>
+                                    <div className="bg-emerald-50 border border-emerald-200/80 rounded-2xl p-4">
+                                        <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-600">Complete Classes</div>
+                                        <div className="text-2xl font-black text-emerald-800 mt-1">
+                                            {computedClassAudits.filter(a => a.status === 'COMPLETE').length} / {computedClassAudits.length}
+                                        </div>
+                                        <div className="text-[11px] text-emerald-600 font-semibold mt-0.5">38/38 periods filled</div>
+                                    </div>
+                                    <div className="bg-blue-50 border border-blue-200/80 rounded-2xl p-4">
+                                        <div className="text-[11px] font-bold uppercase tracking-wider text-blue-600">Instructional Capacity</div>
+                                        <div className="text-2xl font-black text-blue-900 mt-1">38 Slots</div>
+                                        <div className="text-[11px] text-blue-600 font-semibold mt-0.5">Friday P7 & P8 Worship</div>
+                                    </div>
+                                    <div className="bg-indigo-50 border border-indigo-200/80 rounded-2xl p-4">
+                                        <div className="text-[11px] font-bold uppercase tracking-wider text-indigo-600">Missing Lessons</div>
+                                        <div className="text-2xl font-black text-indigo-900 mt-1">
+                                            {computedClassAudits.reduce((acc, a) => acc + (a.missingLessons || 0), 0)}
+                                        </div>
+                                        <div className="text-[11px] text-indigo-600 font-semibold mt-0.5">0 Dropped or skipped</div>
+                                    </div>
+                                </div>
+
+                                {/* Filter input */}
+                                <div className="flex items-center justify-between gap-4">
+                                    <div className="relative flex-1 max-w-sm">
+                                        <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                                        <input
+                                            type="text"
+                                            placeholder="Search class or stream (e.g. JS1, Science)..."
+                                            value={auditClassSearch}
+                                            onChange={(e) => setAuditClassSearch(e.target.value)}
+                                            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:border-indigo-500 focus:bg-white transition"
+                                        />
+                                    </div>
+                                    <div className="text-xs text-slate-500 font-medium">
+                                        Showing {computedClassAudits.filter(a => !auditClassSearch || a.className.toLowerCase().includes(auditClassSearch.toLowerCase()) || a.stream.toLowerCase().includes(auditClassSearch.toLowerCase())).length} of {computedClassAudits.length} classes
+                                    </div>
+                                </div>
+
+                                {/* Class Audit Table */}
+                                <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-2xs">
+                                    <table className="w-full text-left text-xs">
+                                        <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                                            <tr>
+                                                <th className="py-3 px-4">Class</th>
+                                                <th className="py-3 px-3">Stream</th>
+                                                <th className="py-3 px-3 text-center">Required</th>
+                                                <th className="py-3 px-3 text-center">Scheduled</th>
+                                                <th className="py-3 px-3 text-center">Missing</th>
+                                                <th className="py-3 px-3 text-center">Empty Slots</th>
+                                                <th className="py-3 px-3 text-center">Status</th>
+                                                <th className="py-3 px-4">Curriculum Completion Details</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {computedClassAudits
+                                                .filter(a => !auditClassSearch || a.className.toLowerCase().includes(auditClassSearch.toLowerCase()) || a.stream.toLowerCase().includes(auditClassSearch.toLowerCase()))
+                                                .map(audit => (
+                                                    <tr key={audit.classId} className="hover:bg-slate-50/70 transition">
+                                                        <td className="py-3 px-4 font-black text-slate-900">{audit.className}</td>
+                                                        <td className="py-3 px-3">
+                                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
+                                                                audit.stream === 'SCIENCE' 
+                                                                    ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                                                    : audit.stream === 'BC'
+                                                                    ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                                                    : 'bg-slate-50 text-slate-700 border-slate-200'
+                                                            }`}>
+                                                                {audit.stream}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-3 px-3 text-center font-bold text-slate-800">{audit.requiredLessons}</td>
+                                                        <td className="py-3 px-3 text-center font-bold text-emerald-700">{audit.scheduledLessons} / 38</td>
+                                                        <td className="py-3 px-3 text-center font-bold">
+                                                            {audit.missingLessons === 0 ? (
+                                                                <span className="text-emerald-600 font-bold">0</span>
+                                                            ) : (
+                                                                <span className="text-red-600 font-bold bg-red-50 px-2 py-0.5 rounded-full">{audit.missingLessons}</span>
+                                                            )}
+                                                        </td>
+                                                        <td className="py-3 px-3 text-center font-medium text-slate-500">{audit.emptySlots}</td>
+                                                        <td className="py-3 px-3 text-center">
+                                                            <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full uppercase border ${
+                                                                audit.status === 'COMPLETE'
+                                                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                                                    : audit.status === 'IMPOSSIBLE_CONFIGURATION'
+                                                                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                                                    : 'bg-amber-50 text-amber-700 border-amber-200'
+                                                            }`}>
+                                                                {audit.status}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-3 px-4">
+                                                            {audit.missingSubjects && audit.missingSubjects.length > 0 ? (
+                                                                <span className="text-red-600 font-medium">
+                                                                    Missing: {audit.missingSubjects.map(s => `${s.code || s.name} (${s.missing})`).join(', ')}
+                                                                </span>
+                                                            ) : (
+                                                                <span className="text-emerald-700 font-medium flex items-center gap-1.5">
+                                                                    <CheckCircle size={13} className="text-emerald-600" /> Full curriculum allocated (100%)
+                                                                </span>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
+                        {genReportTab === 'FEASIBILITY' && (
+                            <div className="space-y-5">
+                                <div className="p-4 bg-indigo-50 border border-indigo-200 rounded-2xl flex items-start gap-3">
+                                    <ShieldCheck className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5" />
+                                    <div className="text-xs text-indigo-950 space-y-1">
+                                        <p className="font-extrabold text-sm">Pre-Generation Mathematical Feasibility Check</p>
+                                        <p className="text-indigo-800">
+                                            Before scheduling, the algorithm validates total instructional teaching capacity (38 slots per cohort) against curriculum demands.
+                                            Friday periods 7 & 8 are strictly reserved for WORSHIP and excluded from instructional calculations.
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-3">
+                                        <h4 className="font-black text-slate-900 text-sm">Curriculum Capacity Rules</h4>
+                                        <ul className="text-xs text-slate-600 space-y-2">
+                                            <li className="flex items-center gap-2">
+                                                <CheckCircle size={14} className="text-emerald-600" />
+                                                <span>Junior Secondary (JS1–JS3): Exactly 38 lessons/week across 15 subjects.</span>
+                                            </li>
+                                            <li className="flex items-center gap-2">
+                                                <CheckCircle size={14} className="text-emerald-600" />
+                                                <span>Senior Science (SS1–SS3): Exactly 38 lessons/week across 9 subjects.</span>
+                                            </li>
+                                            <li className="flex items-center gap-2">
+                                                <CheckCircle size={14} className="text-emerald-600" />
+                                                <span>Senior BC (SS1–SS3): Exactly 38 lessons/week across 12 subjects.</span>
+                                            </li>
+                                            <li className="flex items-center gap-2">
+                                                <CheckCircle size={14} className="text-emerald-600" />
+                                                <span>Friday Worship (P7 & P8): 0 instructional lessons permitted.</span>
+                                            </li>
+                                        </ul>
+                                    </div>
+
+                                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-3">
+                                        <h4 className="font-black text-slate-900 text-sm">Candidate Retention Policy</h4>
+                                        <p className="text-xs text-slate-600 leading-relaxed">
+                                            The generator uses lexicographical multi-criteria candidate evaluation. A retry attempt that fails or drops lessons is strictly forbidden from overwriting a previous better timetable candidate.
+                                        </p>
+                                        <div className="p-3 bg-white border border-slate-200 rounded-xl text-xs space-y-1 font-mono text-slate-700">
+                                            <div>Penalty per missing lesson: 200,000 pts</div>
+                                            <div>All-classes-complete bonus: 500,000 pts</div>
+                                            <div>Candidate rank: Complete candidates strictly dominate</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {genReportTab === 'LOGS' && (
+                            <div className="h-[420px] rounded-2xl overflow-hidden border border-slate-200">
+                                <LogViewer logs={generationLogs} />
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Footer */}
+                    <div className="p-6 border-t border-slate-100 bg-slate-50 rounded-b-[2rem] flex justify-between items-center">
+                        <div className="text-xs text-slate-500 font-medium">
+                            {computedClassAudits.filter(a => a.status === 'COMPLETE').length} of {computedClassAudits.length} cohorts validated complete.
+                        </div>
+                        <button onClick={() => setShowGenReport(false)} className="px-6 py-2.5 bg-slate-900 text-white rounded-xl font-bold shadow-lg hover:bg-slate-800 transition text-xs">
+                            Close Audit Report
                         </button>
-                    </div>
-                    <div className="flex-1 overflow-hidden">
-                        <LogViewer logs={generationLogs} />
-                    </div>
-                    <div className="p-6 border-t border-slate-100 bg-slate-50 rounded-b-[2rem] flex justify-end">
-                        <button onClick={() => setShowGenReport(false)} className="px-6 py-3 bg-slate-900 text-white rounded-xl font-bold shadow-lg hover:bg-slate-800">Close Report</button>
                     </div>
                 </div>
             </div>

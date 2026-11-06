@@ -94,6 +94,8 @@ class CloudSync {
     private connectionListeners: ((connected: boolean) => void)[] = [];
     public ready = false;
     public isConnected = false;
+    public isApiConnected = false;
+    public isFirestoreConnected = false;
     private readyListeners: (() => void)[] = [];
     private recentErrors: Array<{ timestamp: number; operation: string; error: string; code?: string }> = [];
     public serverSyncVersion = 0;
@@ -104,6 +106,16 @@ class CloudSync {
 
     private getDeletedTeacherIds(): string[] {
         return safeParseArray<string>(localStorage.getItem('ota_deleted_teachers_v1'), []);
+    }
+
+    private updateConnectionStatus(api?: boolean, firestore?: boolean) {
+        if (api !== undefined) this.isApiConnected = api;
+        if (firestore !== undefined) this.isFirestoreConnected = firestore;
+        const newOverall = this.isApiConnected || this.isFirestoreConnected;
+        if (this.isConnected !== newOverall) {
+            this.isConnected = newOverall;
+            this.connectionListeners.forEach(l => l(newOverall));
+        }
     }
 
     constructor() {
@@ -135,8 +147,7 @@ class CloudSync {
             return;
         }
         if (code === 'unavailable' || msg.includes('Could not reach Cloud Firestore backend') || msg.includes('offline')) {
-            this.isConnected = false;
-            this.connectionListeners.forEach(l => l(false));
+            this.updateConnectionStatus(undefined, false);
             console.info(`[CloudSync Notice - ${operation}] Operating in offline/local cache mode; will auto-sync when Cloud Firestore backend is reachable.`);
             return;
         }
@@ -263,17 +274,19 @@ class CloudSync {
                     if (k === KEYS.TEACHERS) {
                         // Strict tombstone filtering: deleted teachers must NEVER be revived by incoming sync payloads
                         const deletedIds = this.getDeletedTeacherIds();
-                        items = items.filter((it: any) => it && it.id && !deletedIds.includes(it.id));
-
                         const localTeachers: Teacher[] = safeParseArray(localStorage.getItem(KEYS.TEACHERS), []);
-                        // Safety reconciliation: an uninitialized or empty remote payload must not wipe
-                        // out populated valid local teachers unless all local teachers were deliberately deleted.
-                        if (items.length === 0 && localTeachers.length > 0) {
-                            const nonDeletedLocal = localTeachers.filter(lt => lt && lt.id && !deletedIds.includes(lt.id));
-                            if (nonDeletedLocal.length > 0) {
-                                items = nonDeletedLocal;
-                            }
-                        }
+
+                        // Filter out deleted and test/mock teachers
+                        items = items.filter((it: any) => {
+                            if (!it || !it.id || deletedIds.includes(it.id)) return false;
+                            const uname = (it.username || '').toLowerCase();
+                            const name = (it.name || '').toLowerCase();
+                            if (uname === 'qq' || name === 'qq') return false;
+                            if (uname.startsWith('sync_') || name.includes('alan turing')) return false;
+                            if (uname.startsWith('matrix_') || name.includes('matrix faculty')) return false;
+                            if (it.id === 't_1793095260406_a8f1a4' || it.id === 't_1793633708715_af1a80') return false;
+                            return true;
+                        });
 
                         // Preserve and synchronize profile pictures and onboarding status across sync updates
                         items.forEach((it: any) => {
@@ -324,14 +337,12 @@ class CloudSync {
             this.sseSource = evtSource;
 
             evtSource.onopen = () => {
-                this.isConnected = true;
-                this.connectionListeners.forEach(l => l(true));
+                this.updateConnectionStatus(true, undefined);
             };
 
             evtSource.addEventListener('init', (e: MessageEvent) => {
                 try {
-                    this.isConnected = true;
-                    this.connectionListeners.forEach(l => l(true));
+                    this.updateConnectionStatus(true, undefined);
                     const data = JSON.parse(e.data);
                     if (data && data.version && data.keys) {
                         this.serverSyncVersion = data.version;
@@ -342,8 +353,7 @@ class CloudSync {
             });
             evtSource.addEventListener('update', (e: MessageEvent) => {
                 try {
-                    this.isConnected = true;
-                    this.connectionListeners.forEach(l => l(true));
+                    this.updateConnectionStatus(true, undefined);
                     const data = JSON.parse(e.data);
                     if (data && data.version) {
                         this.serverSyncVersion = Math.max(this.serverSyncVersion, data.version);
@@ -387,10 +397,7 @@ class CloudSync {
                 if (token) headers['Authorization'] = `Bearer ${token}`;
                 const res = await fetch(`/api/sync/state?v=${this.serverSyncVersion}`, { headers });
                 if (res.ok) {
-                    if (!this.isConnected) {
-                        this.isConnected = true;
-                        this.connectionListeners.forEach(l => l(true));
-                    }
+                    this.updateConnectionStatus(true, undefined);
                     const data = await res.json();
                     if (data && data.unchanged) {
                         return;
@@ -465,8 +472,7 @@ class CloudSync {
             try {
                 const docRef = doc(db, 'ota_app_store', k);
                 onSnapshot(docRef, (docSnap) => {
-                    this.isConnected = true;
-                    this.connectionListeners.forEach(l => l(true));
+                    this.updateConnectionStatus(undefined, true);
                     markReady();
 
                     if (!docSnap.exists()) return;
@@ -523,10 +529,7 @@ class CloudSync {
             const reqVersion = (forceFull || !hasTimetable) ? 0 : this.serverSyncVersion;
             const res = await fetch(`/api/sync/state?v=${reqVersion}`);
             if (res.ok) {
-                if (!this.isConnected) {
-                    this.isConnected = true;
-                    this.connectionListeners.forEach(l => l(true));
-                }
+                this.updateConnectionStatus(true, undefined);
                 const data = await res.json();
                 if (data && data.version) {
                     this.serverSyncVersion = Math.max(this.serverSyncVersion, data.version);
@@ -1066,7 +1069,16 @@ export const storage = {
 
   clearAllTeachers: () => {
     const teachers = storage.getTeachers();
-    teachers.forEach(t => storage.scrubTeacherFromLocalTimetable(t.id));
+    const tombstones = storage.getDeletedTeacherIds();
+    teachers.forEach(t => {
+      storage.scrubTeacherFromLocalTimetable(t.id);
+      if (t.id && !tombstones.includes(t.id)) {
+        tombstones.push(t.id);
+      }
+    });
+    try {
+      localStorage.setItem('ota_deleted_teachers_v1', JSON.stringify(tombstones));
+    } catch {}
     localStorage.setItem(KEYS.TEACHERS, JSON.stringify([]));
     cloud.pushUpdates({ [KEYS.TEACHERS]: [] });
     cloud.pushItem(KEYS.TEACHERS, 'all', []);

@@ -113,6 +113,8 @@ async function runSecurityTests() {
   }
 
   // TEST 7: Authenticated admin can publish with baseline revision (baseRevisionId = 1) without false conflict
+  let adminToken: string | null = null;
+  let originalTimetable: any = null;
   try {
     const loginRes = await fetch(`${BASE_URL}/api/auth/login`, {
       method: 'POST',
@@ -121,12 +123,13 @@ async function runSecurityTests() {
     });
     const loginData = await loginRes.json();
     assert.strictEqual(loginRes.status, 200, 'Admin login must succeed');
-    const token = loginData.token;
-    assert.ok(token, 'Auth token must be returned');
+    adminToken = loginData.token;
+    assert.ok(adminToken, 'Auth token must be returned');
 
-    // Fetch public state to know current revision
+    // Fetch public state to know current revision and save original timetable
     const pubRes = await fetch(`${BASE_URL}/api/public/timetable`);
     const pubData = await pubRes.json();
+    originalTimetable = pubData.timetable;
     const activeRev = pubData.metadata?.revisionId || 1;
 
     // Publish valid draft with baseRevisionId = activeRev
@@ -134,7 +137,7 @@ async function runSecurityTests() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
+        'Authorization': `Bearer ${adminToken}`
       },
       body: JSON.stringify({
         timetable: { JS1A: { 0: { 0: { subjectId: 'eng', teacherId: 't1' } } } },
@@ -153,7 +156,7 @@ async function runSecurityTests() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
+        'Authorization': `Bearer ${adminToken}`
       },
       body: JSON.stringify({
         timetable: { JS1A: { 0: { 0: { subjectId: 'math', teacherId: 't1' } } } },
@@ -169,7 +172,7 @@ async function runSecurityTests() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
+        'Authorization': `Bearer ${adminToken}`
       },
       body: JSON.stringify({
         timetable: { JS1A: { 0: { 0: { subjectId: 'math', teacherId: 't1' } } } },
@@ -184,6 +187,25 @@ async function runSecurityTests() {
     pass(`Force-publish successfully resolved conflict and advanced to Revision #${forceData.revisionId}`);
   } catch (e: any) {
     fail('Publication revision concurrency tests failed', e);
+  } finally {
+    // Restore original timetable so test does not degrade system state
+    if (adminToken && originalTimetable && Object.keys(originalTimetable).length > 1) {
+      try {
+        await fetch(`${BASE_URL}/api/timetable/publish`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${adminToken}`
+          },
+          body: JSON.stringify({
+            timetable: originalTimetable,
+            baseRevisionId: 1,
+            force: true,
+            publisher: 'system_restoration'
+          })
+        });
+      } catch {}
+    }
   }
 
   console.log('\n=====================================================');

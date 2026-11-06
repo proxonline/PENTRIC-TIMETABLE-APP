@@ -46,6 +46,8 @@ async function runMultiInstanceSyncTest() {
   // 2. Spawn Instance B on PORT 3005
   console.log(`Starting secondary Instance B on port ${PORT_B}...`);
   let instanceB: ChildProcess | null = null;
+  let adminTokenB = '';
+  let teacherId = '';
   try {
     instanceB = spawn('npx', ['tsx', 'server.ts'], {
       env: {
@@ -94,12 +96,12 @@ async function runMultiInstanceSyncTest() {
     });
     const signupData = await signupRes.json();
     assert.strictEqual(signupRes.status, 200);
-    const teacherId = signupData.user.id;
+    teacherId = signupData.user.id;
     pass(`Teacher registered on Instance A with ID: ${teacherId}`);
 
     // 4. Test Pre-Approval rejection on Instance B (Cross-device status sync)
     // Wait briefly for disk / snapshot sync
-    await new Promise(r => setTimeout(r, 600));
+    await new Promise(r => setTimeout(r, 1200));
 
     const preApproveOnB = await fetch(`${BASE_B}/api/auth/login`, {
       method: 'POST',
@@ -123,7 +125,7 @@ async function runMultiInstanceSyncTest() {
     });
     const adminDataB = await adminLoginB.json();
     assert.strictEqual(adminLoginB.status, 200);
-    const adminTokenB = adminDataB.token;
+    adminTokenB = adminDataB.token;
 
     const approveOnB = await fetch(`${BASE_B}/api/teachers/approve`, {
       method: 'POST',
@@ -190,7 +192,7 @@ async function runMultiInstanceSyncTest() {
     pass('Teacher updated password on Instance A');
 
     // 8. Teacher logs in with new password on Instance B
-    await new Promise(r => setTimeout(r, 600));
+    await new Promise(r => setTimeout(r, 1200));
 
     const newLoginB = await fetch(`${BASE_B}/api/auth/login`, {
       method: 'POST',
@@ -207,6 +209,20 @@ async function runMultiInstanceSyncTest() {
   } catch (e: any) {
     fail('Multi-instance sync failed', e);
   } finally {
+    try {
+      const adminRes = await fetch(`${BASE_A}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'admin', password: 'admin123', role: 'ADMIN' })
+      });
+      const adminData = await adminRes.json();
+      if (adminData.token && teacherId) {
+        await fetch(`${BASE_A}/api/teachers/${teacherId}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${adminData.token}` }
+        });
+      }
+    } catch {}
     if (instanceB) {
       instanceB.kill('SIGKILL');
     }

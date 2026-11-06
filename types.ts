@@ -61,6 +61,76 @@ export interface ReasoningReport {
   bottlenecks: string[];
   recommendations: string[];
   summary: string;
+  classAudits?: Record<string, ClassAuditReport>;
+  feasibilityReport?: FeasibilityReport;
+}
+
+export type ClassCompletionStatus = 'COMPLETE' | 'INCOMPLETE' | 'IMPOSSIBLE_CONFIGURATION' | 'GENERATION_FAILED';
+
+export interface ClassSubjectAudit {
+  id: string;
+  name: string;
+  code: string;
+  required: number;
+  scheduled: number;
+  missing: number;
+  excess: number;
+}
+
+export interface ClassAuditReport {
+  classId: string;
+  className: string;
+  level: string;
+  stream: string;
+  status: ClassCompletionStatus;
+  requiredLessons: number;
+  scheduledLessons: number;
+  missingLessons: number;
+  emptySlots: number;
+  subjectAudits: ClassSubjectAudit[];
+  missingSubjects: ClassSubjectAudit[];
+  excessSubjects: ClassSubjectAudit[];
+  skippedSubjects: ClassSubjectAudit[];
+  teacherClashes: string[];
+  classClashes: string[];
+  lockedViolations: string[];
+  reservedViolations: string[];
+  dailyLimitViolations: string[];
+  details: string;
+}
+
+export interface ClassFeasibility {
+  classId: string;
+  className: string;
+  level: string;
+  stream: string;
+  status: 'FEASIBLE' | 'OVERALLOCATED' | 'IMPOSSIBLE';
+  availableSlots: number;
+  reservedSlots: number;
+  lockedSlots: number;
+  requiredLessons: number;
+  excessLessons: number;
+  freeSlots: number;
+  issues: string[];
+  subjectBreakdown: {
+    subjectId: string;
+    subjectName: string;
+    code: string;
+    required: number;
+    maxPerDay: number;
+    lockedCount: number;
+    qualifiedTeachersCount: number;
+  }[];
+}
+
+export interface FeasibilityReport {
+  isFeasible: boolean;
+  allClassesFeasible: boolean;
+  classes: Record<string, ClassFeasibility>;
+  overallocatedClasses: ClassFeasibility[];
+  impossibleClasses: ClassFeasibility[];
+  facultyBottlenecks: string[];
+  summary: string;
 }
 
 export interface School {

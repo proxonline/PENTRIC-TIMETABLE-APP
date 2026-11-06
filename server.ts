@@ -152,8 +152,9 @@ function checkAndSyncFromDisk() {
       const diskStore = JSON.parse(raw);
       if (diskStore && diskStore.keys) {
         const teachersChanged = JSON.stringify(diskStore.keys['ota_teachers_v3']) !== JSON.stringify(store.keys['ota_teachers_v3']);
+        const timetableChanged = JSON.stringify(diskStore.keys['ota_timetable_v2']) !== JSON.stringify(store.keys['ota_timetable_v2']);
         const versionChanged = diskStore.version !== store.version;
-        if (versionChanged || teachersChanged) {
+        if (versionChanged || teachersChanged || timetableChanged) {
           store = diskStore;
           populateServerVaultFromMemory();
           return true;
@@ -359,6 +360,25 @@ function seedDefaultStoreData() {
       return true;
     });
     if (store.keys['ota_teachers_v3'].length !== originalCount) {
+      modified = true;
+    }
+  }
+
+  // Purge any fake, mock, or automated test pending verifications
+  if (Array.isArray(store.keys['ota_pending_verifications_v1'])) {
+    const originalPending = store.keys['ota_pending_verifications_v1'].length;
+    store.keys['ota_pending_verifications_v1'] = store.keys['ota_pending_verifications_v1'].filter((p: any) => {
+      if (!p) return false;
+      const uname = (p.username || '').toLowerCase();
+      const name = (p.name || '').toLowerCase();
+      const email = (p.email || '').toLowerCase();
+      if (uname === 'qq' || name === 'qq') return false;
+      if (uname.startsWith('sync_') || name.includes('alan turing')) return false;
+      if (uname.startsWith('matrix_') || name.includes('matrix faculty')) return false;
+      if (email.includes('matrix_teach_') || email.includes('sync_teach_')) return false;
+      return true;
+    });
+    if (store.keys['ota_pending_verifications_v1'].length !== originalPending) {
       modified = true;
     }
   }
@@ -1220,8 +1240,8 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   // Resolve stored credential from entity or server vault
-  const targetAccount = matchedAdmin || matchedTeacher;
-  const storedCredential = targetAccount.password || serverVault[targetAccount.id]?.passwordHash;
+  let targetAccount = matchedAdmin || matchedTeacher;
+  let storedCredential = targetAccount.password || serverVault[targetAccount.id]?.passwordHash;
 
   if (!storedCredential) {
     recordLoginFailure(rateLimitKey);
@@ -1232,7 +1252,24 @@ app.post('/api/auth/login', async (req, res) => {
     });
   }
 
-  const isPasswordCorrect = checkPasswordMatch(rawPass, storedCredential);
+  let isPasswordCorrect = checkPasswordMatch(rawPass, storedCredential);
+  if (!isPasswordCorrect) {
+    // Self-healing: disk or other cluster node may have updated credentials
+    if (checkAndSyncFromDisk()) {
+      const refreshedTeachers = Array.isArray(store.keys['ota_teachers_v3']) ? store.keys['ota_teachers_v3'] : Object.values(store.keys['ota_teachers_v3'] || {});
+      const refreshedAdmins = Array.isArray(store.keys['ota_admins']) ? store.keys['ota_admins'] : Object.values(store.keys['ota_admins'] || {});
+      const isTeacherAccount = !!matchedTeacher;
+      const refreshed = isTeacherAccount
+        ? refreshedTeachers.find((t: any) => t && t.id === targetAccount.id)
+        : refreshedAdmins.find((a: any) => a && a.id === targetAccount.id);
+      const refreshedCred = refreshed?.password || serverVault[targetAccount.id]?.passwordHash;
+      if (refreshedCred) {
+        storedCredential = refreshedCred;
+        isPasswordCorrect = checkPasswordMatch(rawPass, refreshedCred);
+      }
+    }
+  }
+
   if (!isPasswordCorrect) {
     recordLoginFailure(rateLimitKey);
     return res.status(401).json({
@@ -2391,6 +2428,7 @@ app.delete('/api/teachers/:id', requireAdmin, (req, res) => {
 // Clear All Teachers Endpoint
 app.post('/api/teachers/clear-all', requireAdmin, async (req, res) => {
   store.keys['ota_teachers_v3'] = [];
+  store.keys['ota_pending_verifications_v1'] = [];
 
   // Scrub all teacher assignments from timetable
   const timetable = store.keys['ota_timetable_v2'];
@@ -2424,6 +2462,7 @@ app.post('/api/teachers/clear-all', requireAdmin, async (req, res) => {
 
   try {
     await syncTeachersAndVaultToFirestore([]);
+    await syncOtaStoreDocToFirestore('ota_pending_verifications_v1', []);
     await syncOtaStoreDocToFirestore('ota_timetable_v2', store.keys['ota_timetable_v2']);
   } catch (err) {}
 
@@ -2434,12 +2473,13 @@ app.post('/api/teachers/clear-all', requireAdmin, async (req, res) => {
     key: 'ota_teachers_v3',
     changedKeys: {
       ota_teachers_v3: [],
+      ota_pending_verifications_v1: [],
       ota_timetable_v2: sanitized['ota_timetable_v2']
     }
   });
 
-  console.log('[Teachers] Clear all completed: all faculty records wiped.');
-  return res.json({ success: true, message: 'All teachers successfully cleared.' });
+  console.log('[Teachers] Clear all completed: all faculty records and pending verifications wiped.');
+  return res.json({ success: true, message: 'All teachers and pending verifications successfully cleared.' });
 });
 
 // Dedicated Teacher Profile & Picture Update Endpoint
