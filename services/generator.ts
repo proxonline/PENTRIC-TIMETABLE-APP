@@ -121,6 +121,50 @@ export const calculateClassFeasibility = (
 
     const allClassesFeasible = overallocatedClasses.length === 0 && impossibleClasses.length === 0;
 
+    // School-wide shared teacher & morning-core capacity preflight
+    if (!config?.classLayoutOnly && teachers.length > 0) {
+        const subjectDemandById = new Map<string, { sub: Subject; totalPeriods: number }>();
+        for (const classObj of classes) {
+            const eligible = getEligibleSubjectsForClass(classObj, subjects);
+            for (const sub of eligible) {
+                const req = sub.defaultPeriodCount || sub.periodsPerWeek || 3;
+                const entry = subjectDemandById.get(sub.id) || { sub, totalPeriods: 0 };
+                entry.totalPeriods += req;
+                subjectDemandById.set(sub.id, entry);
+            }
+        }
+
+        // Check cumulative demand per teacher when only 1 qualified teacher covers a subject
+        const minForcedDemandByTeacher = new Map<string, { periods: number; morningPeriods: number; subjects: Set<string> }>();
+        for (const { sub, totalPeriods } of subjectDemandById.values()) {
+            const qualified = teachers.filter(t => isTeacherQualifiedForSubject(t, sub));
+            if (qualified.length === 1) {
+                const tid = qualified[0].id;
+                const cur = minForcedDemandByTeacher.get(tid) || { periods: 0, morningPeriods: 0, subjects: new Set<string>() };
+                cur.periods += totalPeriods;
+                const code = (sub.id || '').toLowerCase();
+                if (code.includes('math') || code.includes('eng')) {
+                    cur.morningPeriods += totalPeriods;
+                }
+                cur.subjects.add(sub.name);
+                minForcedDemandByTeacher.set(tid, cur);
+            }
+        }
+
+        for (const [tid, usage] of minForcedDemandByTeacher.entries()) {
+            const teacher = teachers.find(t => t.id === tid);
+            if (usage.periods > 38) {
+                facultyBottlenecks.push(
+                    `Faculty Capacity Bottleneck: ${teacher?.name || tid} is the sole qualified teacher for ${Array.from(usage.subjects).join(', ')} (${usage.periods} periods/week > 38 physical slots). Assign another qualified teacher.`
+                );
+            } else if (usage.morningPeriods > 20) {
+                facultyBottlenecks.push(
+                    `Morning Slot Bottleneck: ${teacher?.name || tid} is sole qualified teacher for ${usage.morningPeriods} morning core periods (${Array.from(usage.subjects).join(', ')}), exceeding 20 P1-P4 morning slots/week.`
+                );
+            }
+        }
+    }
+
     return {
         isFeasible: allClassesFeasible,
         allClassesFeasible,
@@ -187,10 +231,12 @@ const evaluateAttemptQuality = (
     const missingPenalty = missingLessons * 200000;
     const hardErrorPenalty = validation.errors.length * 100000;
     const excessPenalty = excessLessons * 50000;
+    const unassignedTeacherPenalty = (report?.isClassLayoutOnly ? 0 : (report?.unassignedTeacherSlots || 0) * 15000);
     const completionScore = completedLessons * 500;
     const completeAllBonus = validation.allClassesComplete ? 500000 : 0;
+    const balanceBonus = (report?.teacherBalanceScore || 0) * 5;
     const reportScoreBonus = report?.score || 0;
-    return completionScore + completeAllBonus - missingPenalty - hardErrorPenalty - excessPenalty + reportScoreBonus;
+    return completionScore + completeAllBonus + balanceBonus - missingPenalty - hardErrorPenalty - excessPenalty - unassignedTeacherPenalty + reportScoreBonus;
 };
 
 export const generateTimetable = async (
@@ -228,11 +274,17 @@ export const generateTimetable = async (
         addLog('info', 'Class-Layout-Only Draft: Class timetable generated without faculty assignment. Teacher validation deferred.');
     }
 
-    const MAX_RETRIES = 3;
+    const STRATEGIES: Array<'CONSTRAINED_FIRST' | 'TEACHER_SPREAD' | 'BALANCED_INTERLEAVE'> = [
+        'CONSTRAINED_FIRST',
+        'TEACHER_SPREAD',
+        'BALANCED_INTERLEAVE'
+    ];
+    const MAX_RETRIES = STRATEGIES.length;
     let bestQuality = -Infinity;
     let bestGrid: TimetableGrid = {};
     let bestReport: ReasoningReport | undefined;
     let bestValidation: ReturnType<typeof validateTimetable> | undefined;
+    let anyFullSuccess = false;
 
     const solverConfig: GeneratorConfig = {
         ...config,
@@ -241,10 +293,12 @@ export const generateTimetable = async (
     };
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-        addLog('info', `Optimization pass ${attempt + 1} of ${MAX_RETRIES}...`);
+        const strategy = STRATEGIES[attempt];
+        addLog('info', `Optimization pass ${attempt + 1} of ${MAX_RETRIES} (${strategy})...`);
 
         const currentConfig: GeneratorConfig = {
             ...solverConfig,
+            solverStrategy: strategy,
             forceSinglePeriods: attempt > 0 ? true : solverConfig.forceSinglePeriods
         };
 
@@ -272,25 +326,41 @@ export const generateTimetable = async (
             bestValidation = validation;
         }
 
-        const isSuccess = result.success && validation.valid && validation.rule1Satisfied && validation.allClassesComplete && (currentReport?.hardConstraintsSatisfied ?? true) && feasibility.allClassesFeasible;
+        const isSuccess =
+            result.success &&
+            validation.valid &&
+            validation.rule1Satisfied &&
+            validation.allClassesComplete &&
+            (currentReport?.hardConstraintsSatisfied ?? true) &&
+            feasibility.allClassesFeasible;
+
         if (isSuccess) {
-            bestGrid = result.grid;
-            bestReport = currentReport;
-            bestValidation = validation;
-            if (bestReport) {
-                bestReport.classAudits = bestValidation.classAudits;
-                bestReport.feasibilityReport = feasibility;
+            anyFullSuccess = true;
+            const zeroUnassigned = isClassLayoutOnly || (currentReport?.unassignedTeacherSlots || 0) === 0;
+            if (zeroUnassigned && (isClassLayoutOnly || (currentReport?.score || 0) >= 94)) {
+                bestGrid = result.grid;
+                bestReport = currentReport;
+                bestValidation = validation;
+                break;
             }
-            addLog('success', `High-quality timetable generated on pass ${attempt + 1}! All classes 100% complete. Efficiency Score: ${currentReport?.score || 95}/100.`);
-            if (validation.warnings.length > 0) {
-                validation.warnings.forEach(warn => addLog('info', warn));
-            }
-            if (currentReport?.summary) addLog('info', currentReport.summary);
-            onProgress(100, { type: 'success', message: 'Timetable generation complete!', timestamp: Date.now() });
-            return { success: true, timetable: bestGrid, logs, reasoningReport: bestReport };
+            addLog('info', `Pass ${attempt + 1} achieved valid schedule (Score: ${currentReport?.score || 0}/100, Teacher Balance: ${currentReport?.teacherBalanceScore ?? 100}%). Exploring alternative spread...`);
         } else {
             addLog('info', `Optimization pass ${attempt + 1} finished with score ${currentReport?.score || 0}/100 (${validation.errors.length} unresolved notices).`);
         }
+    }
+
+    if (anyFullSuccess && bestValidation) {
+        if (bestReport) {
+            bestReport.classAudits = bestValidation.classAudits;
+            bestReport.feasibilityReport = feasibility;
+        }
+        addLog('success', `Optimal timetable selected! All classes 100% complete. Efficiency Score: ${bestReport?.score || 95}/100 (Teacher Balance: ${bestReport?.teacherBalanceScore ?? 100}%).`);
+        if (bestValidation.warnings.length > 0) {
+            bestValidation.warnings.forEach(warn => addLog('info', warn));
+        }
+        if (bestReport?.summary) addLog('info', bestReport.summary);
+        onProgress(100, { type: 'success', message: 'Timetable generation complete!', timestamp: Date.now() });
+        return { success: true, timetable: bestGrid, logs, reasoningReport: bestReport };
     }
 
     addLog('warning', 'Solver completed optimization passes. Delivering best optimized timetable schedule with detailed constraint report.');

@@ -33,20 +33,38 @@ service cloud.firestore {
         (!('status' in data) || (data.status in ['ACTIVE', 'ARCHIVED']));
     }
 
-    // Schools collection:
-    // - Read and Write allowed for school registration and real-time portal lookup
+    function isValidAppStoreDoc(key, data) {
+      return key is string && key.size() >= 3 && key.size() <= 128 &&
+        data.keys().hasAll(['updatedAt']) &&
+        data.updatedAt is number;
+    }
+
+    function isValidSyncDiagnosticPing(data) {
+      return data.keys().hasAll(['deviceId', 'timestamp']) &&
+        data.deviceId is string && data.deviceId.size() > 0 && data.deviceId.size() <= 128 &&
+        data.timestamp is number &&
+        (!('deviceLabel' in data) || (data.deviceLabel is string && data.deviceLabel.size() <= 128));
+    }
+
+    // Schools collection: schema-validated institutional registry
     match /schools/{schoolId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if isValidSchool(incoming());
+      allow delete: if isValidId(schoolId);
     }
 
     // Dynamic application sync collection for real-time schedule & faculty synchronization
     match /ota_app_store/{key} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if isValidAppStoreDoc(key, incoming());
+      allow delete: if isValidId(key);
     }
 
     // Cross-device Sync Diagnostics collection
     match /ota_sync_diagnostics/{pingId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if isValidId(pingId) && isValidSyncDiagnosticPing(incoming());
+      allow delete: if isValidId(pingId);
     }
 
     // Default deny all unknown collections

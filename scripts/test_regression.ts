@@ -334,6 +334,203 @@ async function runAllTests() {
     assert(reportWithExcess.reasoningReport?.avoidableUnplacedSlots === 0, 'Zero avoidable unplaced slots (all 38 physical slots utilized)');
 
     // -------------------------------------------------------------------------
+    // CASE L: Tight Shared-Teacher Contention Across Multiple Classes (Zero Clashes, Zero Dropped Teachers)
+    // -------------------------------------------------------------------------
+    console.log('\nCase L: Shared-Teacher Contention & Cross-Class Ejection Repair');
+    const sharedSciClasses: Class[] = [
+        { id: 'SS1A1', name: 'SS1A1', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE' },
+        { id: 'SS1A2', name: 'SS1A2', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE' },
+        { id: 'SS2A1', name: 'SS2A1', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE' }
+    ];
+    // Give each Science subject 1 shared teacher teaching all 3 classes (e.g. 5*3=15 periods/week; 3*4=12, etc.)
+    const tightSharedTeachers: Teacher[] = eligibleSci.map((sub, idx) => ({
+        id: `shared_sci_${idx}`,
+        name: `Shared ${sub.name}`,
+        username: `shared_${idx}`,
+        password: 'password',
+        recoveryCode: 'REC123',
+        isCompleted: true,
+        subjectsTaught: [sub.id],
+        assignedClasses: sharedSciClasses.map(c => c.id),
+        availability: idx % 2 === 0 ? { 0: { 2: Availability.UNAVAILABLE }, 3: { 1: Availability.AVOID } } : {}
+    }));
+
+    const sharedRes = await generateTimetable(
+        tightSharedTeachers,
+        sharedSciClasses,
+        eligibleSci,
+        'BALANCED',
+        () => {},
+        { goal: 'BALANCED', forceSinglePeriods: true }
+    );
+    const sharedVal = validateTimetable(sharedRes.timetable, sharedSciClasses, eligibleSci, tightSharedTeachers, false);
+    assert(sharedRes.success && sharedVal.valid, `3-class shared-teacher timetable solved cleanly with 0 errors (errors: ${sharedVal.errors.length})`);
+    assert((sharedRes.reasoningReport?.unassignedTeacherSlots || 0) === 0, `Zero lessons left without a qualified teacher (unassigned: ${sharedRes.reasoningReport?.unassignedTeacherSlots})`);
+
+    // Verify no shared teacher was placed in their UNAVAILABLE Monday P3 slot
+    let violatedUnavail = false;
+    for (const c of sharedSciClasses) {
+        const monP3 = sharedRes.timetable[c.id]?.[0]?.[2];
+        const tid = monP3?.teacherId;
+        if (tid) {
+            const tObj = tightSharedTeachers.find(t => t.id === tid);
+            if (tObj?.availability?.[0]?.[2] === Availability.UNAVAILABLE) {
+                violatedUnavail = true;
+            }
+        }
+    }
+    assert(!violatedUnavail, 'Shared teachers strictly respect UNAVAILABLE constraints across classes');
+
+    // -------------------------------------------------------------------------
+    // CASE M: Dynamic Multi-Teacher Switching When Primary Teacher Is Busy/Unavailable
+    // -------------------------------------------------------------------------
+    console.log('\nCase M: Dynamic Qualified-Teacher Switching');
+    const c1: Class = { id: 'SS1A1', name: 'SS1A1', category: 'SSS_SCIENCE', level: 'SENIOR', stream: 'SCIENCE' };
+    const subOnlyPhys = eligibleSci.find(s => s.id === 'phy_sci')!;
+    const teacherPrimaryUnavail: Teacher = {
+        id: 't_phys_primary',
+        name: 'Primary Physics',
+        username: 'phys1',
+        password: 'pw',
+        recoveryCode: 'R1',
+        isCompleted: true,
+        subjectsTaught: ['phy_sci'],
+        assignedClasses: ['SS1A1'],
+        availability: {
+            0: { 0: Availability.UNAVAILABLE, 1: Availability.UNAVAILABLE, 2: Availability.UNAVAILABLE, 3: Availability.UNAVAILABLE, 4: Availability.UNAVAILABLE, 5: Availability.UNAVAILABLE, 6: Availability.UNAVAILABLE, 7: Availability.UNAVAILABLE },
+            1: { 0: Availability.UNAVAILABLE, 1: Availability.UNAVAILABLE, 2: Availability.UNAVAILABLE, 3: Availability.UNAVAILABLE, 4: Availability.UNAVAILABLE, 5: Availability.UNAVAILABLE, 6: Availability.UNAVAILABLE, 7: Availability.UNAVAILABLE },
+            2: { 0: Availability.UNAVAILABLE, 1: Availability.UNAVAILABLE, 2: Availability.UNAVAILABLE, 3: Availability.UNAVAILABLE, 4: Availability.UNAVAILABLE, 5: Availability.UNAVAILABLE, 6: Availability.UNAVAILABLE, 7: Availability.UNAVAILABLE },
+            3: { 0: Availability.UNAVAILABLE, 1: Availability.UNAVAILABLE, 2: Availability.UNAVAILABLE, 3: Availability.UNAVAILABLE, 4: Availability.UNAVAILABLE, 5: Availability.UNAVAILABLE, 6: Availability.UNAVAILABLE, 7: Availability.UNAVAILABLE }
+        } // Only free Friday! (can max 1/day or 2/day = 2 periods total, cannot cover 5 periods alone)
+    };
+    const teacherBackupFull: Teacher = {
+        id: 't_phys_backup',
+        name: 'Backup Physics',
+        username: 'phys2',
+        password: 'pw',
+        recoveryCode: 'R2',
+        isCompleted: true,
+        subjectsTaught: ['phy_sci'],
+        assignedClasses: [], // Not explicitly class-assigned, must still be dynamically discovered!
+        availability: {}
+    };
+    const switchSolver = new ConstraintSolver(
+        [teacherPrimaryUnavail, teacherBackupFull],
+        [c1],
+        [subOnlyPhys],
+        { goal: 'BALANCED', forceSinglePeriods: true }
+    );
+    const switchRes = await switchSolver.solve();
+    const switchReport = switchSolver.getReasoningReport();
+    assert((switchReport.unassignedTeacherSlots || 0) === 0, `Solver dynamically switches to backup qualified teacher (unassigned: ${switchReport.unassignedTeacherSlots})`);
+    assert(switchReport.totalSlotsScheduled === 5, `All 5 Physics periods placed with dynamic teacher switching (placed: ${switchReport.totalSlotsScheduled})`);
+
+    // -------------------------------------------------------------------------
+    // CASE N: Multi-Objective Teacher Balance & Cross-Day Spread
+    // -------------------------------------------------------------------------
+    console.log('\nCase N: Multi-Objective Teacher Balance & Daily Evenness');
+    const balClasses = ALL_CLASSES.slice(0, 6);
+    const balTeachers: Teacher[] = [];
+    const balMathIds = ALL_SUBJECTS.filter(s => s.id.includes('math')).map(s => s.id);
+    const balEngIds = ALL_SUBJECTS.filter(s => s.id.includes('eng')).map(s => s.id);
+    const balOtherIds = ALL_SUBJECTS.filter(s => !s.id.includes('math') && !s.id.includes('eng')).map(s => s.id);
+    for (let i = 0; i < 2; i++) {
+        balTeachers.push({
+            id: `bm_${i}`, name: `BM ${i}`, username: `bm_${i}`, password: 'pw', recoveryCode: 'R', isCompleted: true,
+            subjectsTaught: balMathIds, assignedClasses: balClasses.map(c => c.id), availability: {}
+        });
+        balTeachers.push({
+            id: `be_${i}`, name: `BE ${i}`, username: `be_${i}`, password: 'pw', recoveryCode: 'R', isCompleted: true,
+            subjectsTaught: balEngIds, assignedClasses: balClasses.map(c => c.id), availability: {}
+        });
+    }
+    for (let i = 0; i < 10; i++) {
+        balTeachers.push({
+            id: `bo_${i}`, name: `BO ${i}`, username: `bo_${i}`, password: 'pw', recoveryCode: 'R', isCompleted: true,
+            subjectsTaught: balOtherIds, assignedClasses: balClasses.map(c => c.id), availability: {}
+        });
+    }
+    const balRes = await generateTimetable(
+        balTeachers,
+        balClasses,
+        ALL_SUBJECTS,
+        'TEACHER_FRIENDLY',
+        () => {},
+        { goal: 'TEACHER_FRIENDLY', forceSinglePeriods: true }
+    );
+    assert(balRes.success, '6-class TEACHER_FRIENDLY schedule solved completely');
+    assert((balRes.reasoningReport?.teacherBalanceScore || 0) >= 75, `High teacher daily balance score achieved (${balRes.reasoningReport?.teacherBalanceScore}%)`);
+    assert((balRes.reasoningReport?.unassignedTeacherSlots || 0) === 0, 'Zero unassigned teacher slots across 6 balanced classes');
+
+    // -------------------------------------------------------------------------
+    // CASE O: Full 24-Class Shared Faculty End-to-End Stress Test
+    // -------------------------------------------------------------------------
+    console.log('\nCase O: Full 24-Class Shared Faculty End-to-End Solve');
+    const fullFaculty: Teacher[] = [];
+    for (let i = 0; i < 7; i++) {
+        fullFaculty.push({
+            id: `fm_${i}`, name: `FM ${i}`, username: `fm_${i}`, password: 'pw', recoveryCode: 'R', isCompleted: true,
+            subjectsTaught: balMathIds, assignedClasses: ALL_CLASSES.map(c => c.id),
+            availability: i % 2 === 0 ? { [i % 5]: { 0: Availability.UNAVAILABLE } } : {}
+        });
+        fullFaculty.push({
+            id: `fe_${i}`, name: `FE ${i}`, username: `fe_${i}`, password: 'pw', recoveryCode: 'R', isCompleted: true,
+            subjectsTaught: balEngIds, assignedClasses: ALL_CLASSES.map(c => c.id),
+            availability: i % 2 === 0 ? { [(i + 1) % 5]: { 1: Availability.AVOID } } : {}
+        });
+    }
+    for (let i = 0; i < 30; i++) {
+        const subs = [0, 1, 2, 3].map(k => balOtherIds[(i + k * 7) % balOtherIds.length]);
+        fullFaculty.push({
+            id: `fd_${i}`, name: `FD ${i}`, username: `fd_${i}`, password: 'pw', recoveryCode: 'R', isCompleted: true,
+            subjectsTaught: Array.from(new Set(subs)), assignedClasses: ALL_CLASSES.map(c => c.id),
+            availability: {}
+        });
+    }
+    const fullFacRes = await generateTimetable(
+        fullFaculty,
+        ALL_CLASSES,
+        ALL_SUBJECTS,
+        'BALANCED',
+        () => {},
+        { goal: 'BALANCED', forceSinglePeriods: true }
+    );
+    const fullFacVal = validateTimetable(fullFacRes.timetable, ALL_CLASSES, ALL_SUBJECTS, fullFaculty, false);
+    assert(fullFacRes.success && fullFacVal.valid && fullFacVal.allClassesComplete, `All 24 classes solved with full shared faculty (errors: ${fullFacVal.errors.length})`);
+    assert((fullFacRes.reasoningReport?.unassignedTeacherSlots || 0) === 0, `Zero unassigned teachers across all 912 slots (unassigned: ${fullFacRes.reasoningReport?.unassignedTeacherSlots})`);
+
+    // =========================================================================
+    // CASE P: 5-period/week Science Core Subject Weekday Spread (1/day Mon-Fri)
+    // =========================================================================
+    console.log('\n[CASE P] Testing 5-period Science Subject Weekday Spread (Physics = 5 periods across 5 days)');
+    const sciClasses = ALL_CLASSES.filter(c => c.stream === 'SCIENCE');
+    const sciRes = await generateTimetable(
+        [],
+        sciClasses,
+        ALL_SUBJECTS,
+        'BALANCED',
+        () => {},
+        { goal: 'BALANCED', forceSinglePeriods: true, classLayoutOnly: true }
+    );
+    assert(sciRes.success, 'Science stream layout solve succeeded');
+    for (const sc of sciClasses) {
+        let phyTotal = 0;
+        let phyDays = 0;
+        for (let d = 0; d < 5; d++) {
+            let dc = 0;
+            for (let p = 0; p < 8; p++) {
+                if (sciRes.timetable[sc.id]?.[d]?.[p]?.subjectId === 'phy_sci') {
+                    phyTotal++;
+                    dc++;
+                }
+            }
+            if (dc > 0) phyDays++;
+        }
+        assert(phyTotal === 5, `${sc.name} has exact 5 Physics periods (got ${phyTotal})`);
+        assert(phyDays === 5, `${sc.name} spreads Physics across all 5 weekdays (got ${phyDays} days)`);
+    }
+
+    // -------------------------------------------------------------------------
     // SUMMARY
     // -------------------------------------------------------------------------
     console.log('\n=====================================================');

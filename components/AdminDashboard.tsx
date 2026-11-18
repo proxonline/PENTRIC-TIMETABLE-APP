@@ -304,13 +304,14 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
         })
       });
 
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
         showToast(data.error || 'Failed to approve faculty account.', 'ALERT');
         return;
       }
 
-      storage.approveTeacher(teacherId, currentUser?.name || 'Administrator');
+      storage.applyTeacherApprovalResultInMemory(teacherId, 'APPROVE', data.teacher);
+      await storage.fetchLatestFromApi(true).catch(() => {});
       setTeachers(storage.getTeachers());
       showToast('Teacher verified and approved! Imposter check cleared.', 'SUCCESS');
     } catch {
@@ -335,13 +336,14 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
         })
       });
 
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
         showToast(data.error || 'Failed to reject faculty account.', 'ALERT');
         return;
       }
 
-      storage.rejectTeacher(teacherId, reason || 'Flagged as imposter / unverified', currentUser?.name || 'Administrator', true);
+      storage.applyTeacherApprovalResultInMemory(teacherId, 'DELETE');
+      await storage.fetchLatestFromApi(true).catch(() => {});
       setTeachers(storage.getTeachers());
       showToast('Flagged account removed. Imposter access denied.', 'ALERT');
     } catch {
@@ -1115,7 +1117,7 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
     const previousTab = activeScheduleTab;
     const previousHasDraft = hasDraft;
     const currentMeta = storage.getTimetableMetadata();
-    const optimisticRev = (currentMeta?.revisionId || 1) + 1;
+    const optimisticRev = (currentMeta?.revisionId ?? 0) + 1;
 
     // ⚡ Instant Optimistic UI Transition (<1ms)
     setIsPublishing(true);
@@ -1631,6 +1633,37 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
                                 </div>
                             </div>
 
+                            {/* Pending Teacher Anti-Imposter Verification Banner */}
+                            {pendingTeachers.length > 0 && (
+                                <div className="bg-blue-50 border border-blue-200 rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm">
+                                    <div className="flex items-center gap-3.5">
+                                        <div className="w-11 h-11 rounded-2xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-blue-600/20">
+                                            <ShieldCheck size={22} />
+                                        </div>
+                                        <div>
+                                            <div className="flex items-center gap-2">
+                                                <h3 className="font-black text-slate-900 text-sm md:text-base">
+                                                    {pendingTeachers.length} Staff Verification {pendingTeachers.length === 1 ? 'Request' : 'Requests'} Waiting
+                                                </h3>
+                                                <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-600 text-white">
+                                                    Action Needed
+                                                </span>
+                                            </div>
+                                            <p className="text-xs text-slate-600 mt-0.5">
+                                                {pendingTeachers.map(t => `${t.name} (@${t.username})`).slice(0, 3).join(', ')}{pendingTeachers.length > 3 ? ` +${pendingTeachers.length - 3} more` : ''} — Review and approve or deny imposter.
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={() => setActiveView('TEACHERS')}
+                                        className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition shadow-sm shrink-0 flex items-center gap-1.5 cursor-pointer"
+                                    >
+                                        <ShieldCheck size={15} />
+                                        Review Faculty Requests
+                                    </button>
+                                </div>
+                            )}
+
                             {/* 2. Four Core Metric Cards (Spacious & Clean) */}
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                 <div 
@@ -2137,32 +2170,50 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
                     return (
                     <div className="space-y-6 animate-in fade-in duration-500">
                         {/* AUTHORITATIVE REVISION & DRAFT STATUS BANNER */}
+                        {(() => {
+                            const hasPublishedGrid = !!(grid && Object.keys(grid).some(k => k !== '_revisionId'));
+                            const isUnpublishedBaseline = !hasPublishedGrid || timetableMetadata.revisionId === 0 || timetableMetadata.status === 'DRAFT';
+                            return (
                         <div className={`p-5 rounded-2xl border shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4 transition-all ${
                             hasDraft 
                                 ? 'bg-amber-50/90 border-amber-200 text-amber-950' 
-                                : 'bg-slate-900 border-slate-800 text-white'
+                                : isUnpublishedBaseline
+                                    ? 'bg-slate-800 border-slate-700 text-white'
+                                    : 'bg-slate-900 border-slate-800 text-white'
                         }`}>
                             <div className="flex items-center gap-3.5">
                                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-                                    hasDraft ? 'bg-amber-100 text-amber-700' : 'bg-blue-600/30 text-blue-400 border border-blue-500/30'
+                                    hasDraft ? 'bg-amber-100 text-amber-700' : isUnpublishedBaseline ? 'bg-slate-700 text-amber-300 border border-slate-600' : 'bg-blue-600/30 text-blue-400 border border-blue-500/30'
                                 }`}>
                                     {hasDraft ? <AlertTriangle size={20} /> : <ShieldCheck size={20} />}
                                 </div>
                                 <div>
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex items-center gap-2 flex-wrap">
                                         <h4 className="font-extrabold text-sm md:text-base">
-                                            {hasDraft ? 'Unpublished Schedule Draft Active' : 'Authoritative Master Schedule Active'}
+                                            {hasDraft
+                                                ? 'Unpublished Schedule Draft Active'
+                                                : isUnpublishedBaseline
+                                                    ? 'Draft 0 — No Published Timetable Yet'
+                                                    : 'Authoritative Master Schedule Active'}
                                         </h4>
                                         <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full ${
-                                            hasDraft ? 'bg-amber-200/80 text-amber-900' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                            hasDraft
+                                                ? 'bg-amber-200/80 text-amber-900'
+                                                : isUnpublishedBaseline
+                                                    ? 'bg-amber-500/20 text-amber-200 border border-amber-400/30'
+                                                    : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                                         }`}>
-                                            Published Revision #{timetableMetadata.revisionId}
+                                            {isUnpublishedBaseline ? 'Draft #0 • Not Published' : `Published Revision #${timetableMetadata.revisionId}`}
                                         </span>
                                     </div>
                                     <p className={`text-xs mt-0.5 ${hasDraft ? 'text-amber-800' : 'text-slate-400'}`}>
                                         {hasDraft 
-                                            ? `A newly generated schedule draft is awaiting approval. Faculty and public portals will continue displaying Revision #${timetableMetadata.revisionId} until you publish.`
-                                            : `Officially released by ${timetableMetadata.publishedBy} • Synced monotonically across all devices.`}
+                                            ? (isUnpublishedBaseline
+                                                ? 'A generated schedule draft is ready for review. No timetable has been published to faculty or students yet.'
+                                                : `A newly generated schedule draft is awaiting approval. Faculty and public portals will continue displaying Revision #${timetableMetadata.revisionId} until you publish.`)
+                                            : isUnpublishedBaseline
+                                                ? 'System is at Draft #0. Generate and publish a master timetable when ready.'
+                                                : `Officially released by ${timetableMetadata.publishedBy} • Synced monotonically across all devices.`}
                                     </p>
                                 </div>
                             </div>
@@ -2179,7 +2230,7 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
                                                         : 'text-amber-800 hover:text-amber-950'
                                                 }`}
                                             >
-                                                Live (Rev #{timetableMetadata.revisionId})
+                                                {isUnpublishedBaseline ? 'Live (None yet)' : `Live (Rev #${timetableMetadata.revisionId})`}
                                             </button>
                                             <button
                                                 onClick={() => setActiveScheduleTab('DRAFT')}
@@ -2214,6 +2265,8 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
                                 )}
                             </div>
                         </div>
+                            );
+                        })()}
 
                         {/* OPTIMIZATION STRATEGY SELECTOR BAR */}
                         <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
@@ -2227,9 +2280,8 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, onSwitchSchool }) =>
                             <div className="flex flex-wrap gap-2 w-full md:w-auto">
                                 {[
                                     { id: 'BALANCED', label: 'Balanced Default' },
-                                    { id: 'TEACHER_PREFERENCE', label: 'Faculty Preferences' },
-                                    { id: 'LOAD_BALANCED', label: 'Smooth Daily Load' },
-                                    { id: 'FAST', label: 'Rapid Solve' }
+                                    { id: 'TEACHER_FRIENDLY', label: 'Teacher Friendly' },
+                                    { id: 'STUDENT_FRIENDLY', label: 'Student Friendly' }
                                 ].map(g => (
                                     <button
                                         key={g.id}

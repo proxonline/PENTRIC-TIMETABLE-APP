@@ -91,12 +91,23 @@ export const PublicTimetable: React.FC<Props> = ({ onBackToLogin }) => {
             <div className="flex items-center gap-2.5 flex-wrap">
               <School className="w-5 h-5 text-blue-600" />
               <h1 className="text-xl font-black text-slate-900 tracking-tight">{currentSchool.name}</h1>
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                Rev #{meta.revisionId}
-              </span>
+              {!grid || meta.revisionId === 0 || meta.status === 'DRAFT' ? (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                  <Clock className="w-3.5 h-3.5 text-amber-600" />
+                  Draft #{meta.revisionId ?? 0}
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                  Rev #{meta.revisionId}
+                </span>
+              )}
             </div>
-            <p className="text-xs text-slate-500 font-medium">{currentSchool.name} Student & Parent Timetable Portal • Official Published Revision</p>
+            <p className="text-xs text-slate-500 font-medium">
+              {!grid || meta.revisionId === 0 || meta.status === 'DRAFT'
+                ? `${currentSchool.name} Student & Parent Timetable Portal • No Published Timetable Yet`
+                : `${currentSchool.name} Student & Parent Timetable Portal • Official Published Revision`}
+            </p>
           </div>
         </div>
 

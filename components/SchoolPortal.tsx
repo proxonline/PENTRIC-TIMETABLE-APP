@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { School } from '../types';
 import { storage } from '../services/storage';
 import { 
@@ -39,6 +39,14 @@ export const SchoolPortal: React.FC<SchoolPortalProps> = ({
   });
   const [modalError, setModalError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    const unsub = storage.subscribe(() => {
+      setSchools(storage.getSchools());
+    });
+    storage.fetchLatestFromApi(false).catch(() => {});
+    return () => unsub();
+  }, []);
 
   const filteredSchools = useMemo(() => {
     const q = (searchQuery || '').toLowerCase().trim();

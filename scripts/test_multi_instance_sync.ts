@@ -76,10 +76,12 @@ async function runMultiInstanceSyncTest() {
     const codeData = await codeRes.json();
     assert.strictEqual(codeRes.status, 200);
 
-    const fs = await import('fs');
-    const list = JSON.parse(fs.readFileSync('data/pending_verifications.json', 'utf8'));
+    const { clientDb } = await import('../services/firebaseAdmin');
+    const { doc, getDoc } = await import('firebase/firestore');
+    const snap = await getDoc(doc(clientDb, 'ota_app_store', 'ota_pending_verifications_v1'));
+    const list = snap.exists() && Array.isArray(snap.data()?.payload) ? snap.data().payload : [];
     const match = list.find((item: any) => item && item.email === testEmail);
-    assert.ok(match, 'Pending verification must exist');
+    assert.ok(match, 'Pending verification must exist in Firestore');
     const code = match.code;
 
     const signupRes = await fetch(`${BASE_A}/api/auth/signup`, {

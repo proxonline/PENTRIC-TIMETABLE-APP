@@ -52,3 +52,13 @@ html, body {
   text-orientation: mixed;
   transform: rotate(180deg);
 }
+
+.font-teacher-ui {
+  font-family: 'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+.font-mono-num {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  font-variant-numeric: tabular-nums;
+}
+

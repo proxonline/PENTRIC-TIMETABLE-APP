@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot, setDoc, doc } from 'firebase/firestore';
-import { db, auth, signInAnonymously } from '../services/firebase';
+import { db } from '../services/firebase';
 import { storage } from '../services/storage';
 import { Send, Activity, RefreshCw, AlertTriangle, CheckCircle, Smartphone, Clock, ShieldAlert } from 'lucide-react';
 
@@ -10,6 +10,9 @@ interface PingDoc {
   deviceLabel: string;
   timestamp: number;
 }
+
+let sessionDeviceId = '';
+let sessionDeviceLabel = '';
 
 export const SyncDiagnostics: React.FC = () => {
   const [deviceId, setDeviceId] = useState<string>('');
@@ -23,19 +26,14 @@ export const SyncDiagnostics: React.FC = () => {
   const [retryCount, setRetryCount] = useState<number>(0);
 
   useEffect(() => {
-    // Generate or fetch unique persistent device ID
-    let storedId = localStorage.getItem('ota_device_id');
-    if (!storedId) {
-      storedId = 'dev_' + Math.random().toString(36).substring(2, 9);
-      localStorage.setItem('ota_device_id', storedId);
+    if (!sessionDeviceId) {
+      sessionDeviceId = 'dev_' + Math.random().toString(36).substring(2, 9);
     }
-    setDeviceId(storedId);
-
-    let storedLabel = localStorage.getItem('ota_device_label');
-    if (!storedLabel) {
-      storedLabel = `Device (${storedId.slice(-4)})`;
+    if (!sessionDeviceLabel) {
+      sessionDeviceLabel = `Device (${sessionDeviceId.slice(-4)})`;
     }
-    setDeviceLabel(storedLabel);
+    setDeviceId(sessionDeviceId);
+    setDeviceLabel(sessionDeviceLabel);
 
     // Initial load of recent errors from storage
     try {
@@ -45,70 +43,44 @@ export const SyncDiagnostics: React.FC = () => {
     } catch {}
 
     // Live subscription to ota_sync_diagnostics Firestore collection
-    let isCancelled = false;
     let unsubscribe: () => void = () => {};
 
-    const attachListener = async () => {
-      try {
-        if (auth && !auth.currentUser) {
-          try {
-            await signInAnonymously(auth);
-          } catch {
-            // anonymous auth optional when rules allow public access
-          }
-        }
-        if (isCancelled) return;
-
-        const coll = collection(db, 'ota_sync_diagnostics');
-        unsubscribe = onSnapshot(coll, (snapshot) => {
-          setSubError(null);
-          const docsList: PingDoc[] = [];
-          snapshot.forEach((docSnap) => {
-            const data = docSnap.data();
-            if (data) {
-              docsList.push({
-                id: docSnap.id,
-                deviceId: data.deviceId || 'Unknown',
-                deviceLabel: data.deviceLabel || 'Unnamed Device',
-                timestamp: typeof data.timestamp === 'number' ? data.timestamp : Date.now()
-              });
-            }
-          });
-          docsList.sort((a, b) => b.timestamp - a.timestamp);
-          setPings(docsList);
-        }, async (err: any) => {
-          const code = err?.code || '';
-          const msg = err?.message || String(err);
-          setSubError(`${code ? `[Code: ${code}] ` : ''}${msg}`);
-          console.warn('Sync Diagnostics snapshot status:', code, msg);
-
-          if (code === 'permission-denied') {
-            if (auth && !auth.currentUser) {
-              try {
-                await signInAnonymously(auth);
-                setTimeout(() => {
-                  if (!isCancelled) setRetryCount(c => c + 1);
-                }, 2000);
-              } catch {}
-            }
+    try {
+      const coll = collection(db, 'ota_sync_diagnostics');
+      unsubscribe = onSnapshot(coll, (snapshot) => {
+        setSubError(null);
+        const docsList: PingDoc[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          if (data) {
+            docsList.push({
+              id: docSnap.id,
+              deviceId: data.deviceId || 'Unknown',
+              deviceLabel: data.deviceLabel || 'Unnamed Device',
+              timestamp: typeof data.timestamp === 'number' ? data.timestamp : Date.now()
+            });
           }
         });
-      } catch (e: any) {
-        setSubError(`Failed to attach snapshot listener: ${e?.message || String(e)}`);
-      }
-    };
-
-    attachListener();
+        docsList.sort((a, b) => b.timestamp - a.timestamp);
+        setPings(docsList);
+      }, (err: any) => {
+        const code = err?.code || '';
+        const msg = err?.message || String(err);
+        setSubError(`${code ? `[Code: ${code}] ` : ''}${msg}`);
+        console.warn('Sync Diagnostics snapshot status:', code, msg);
+      });
+    } catch (e: any) {
+      setSubError(`Failed to attach snapshot listener: ${e?.message || String(e)}`);
+    }
 
     return () => {
-      isCancelled = true;
       unsubscribe();
     };
   }, [retryCount]);
 
   const handleLabelChange = (val: string) => {
+    sessionDeviceLabel = val;
     setDeviceLabel(val);
-    localStorage.setItem('ota_device_label', val);
   };
 
   const handleSendPing = async () => {

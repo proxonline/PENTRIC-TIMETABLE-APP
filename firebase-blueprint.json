@@ -94,8 +94,7 @@
       "type": "object",
       "properties": {
         "payload": {
-          "type": "string",
-          "description": "Serialized data payload for the sync key"
+          "description": "Structured JSON payload (array, object, string, or null) for the sync key"
         },
         "updatedAt": {
           "type": "number",

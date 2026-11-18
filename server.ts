@@ -5,22 +5,43 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import nodemailer from 'nodemailer';
-import { GoogleGenAI } from '@google/genai';
-import { createServer as createViteServer } from 'vite';
 import { ALL_SUBJECTS, ALL_CLASSES } from './constants';
-import { adminAuth, adminDb, clientDb, syncOtaStoreDocToFirestore, deleteOtaStoreDocFromFirestore, syncSchoolDocToFirestore, deleteSchoolDocFromFirestore, hasAdminCredentials } from './services/firebaseAdmin';
-import { collection, getDocs, doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
+import {
+  GeminiConfigurationError,
+  runServerChatModeration,
+  runServerComfortOptimization,
+  runServerConflictFix,
+  runServerErrorAnalysis,
+  runServerLearnReference,
+  runServerLightningAnalysis,
+  runServerTimetableAudit,
+} from './services/geminiServer';
+import { adminAuth, adminDb, clientDb, getOtaStoreDocFromFirestore, syncOtaStoreDocToFirestore, updateOtaStoreListInFirestore, deleteOtaStoreDocFromFirestore, syncSchoolDocToFirestore, deleteSchoolDocFromFirestore, hasAdminCredentials } from './services/firebaseAdmin';
+import { bindTeacherToTimetableGrid } from './services/teacherAutoBind';
+import { collection, getDocs, doc, getDoc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import firebaseConfigJson from './firebase-applet-config.json' with { type: 'json' };
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = Number(process.env.PORT) || 3000;
 
-if (process.env.NODE_ENV === 'production') {
-  if (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'ota_smart_secret_key_2026') {
-    console.error('FATAL CONFIGURATION ERROR: A strong, unique JWT_SECRET environment variable is strictly required in production.');
-    process.exit(1);
+const INSECURE_JWT_PLACEHOLDERS = new Set([
+  'ota_smart_secret_key_2026',
+  'ota_smart_secret_key_dev',
+  'changeme',
+  'secret'
+]);
+const rawJwtEnv = (process.env.JWT_SECRET || '').trim();
+let resolvedJwtSecret = rawJwtEnv;
+if (!resolvedJwtSecret || (process.env.NODE_ENV === 'production' && INSECURE_JWT_PLACEHOLDERS.has(resolvedJwtSecret))) {
+  if (process.env.NODE_ENV === 'production') {
+    console.warn('[Auth Security] JWT_SECRET is not set (or uses a placeholder) in production. Generating an ephemeral 256-bit runtime secret. Set JWT_SECRET in your Render Environment Variables so login sessions remain valid across restarts.');
+    resolvedJwtSecret = crypto.randomBytes(32).toString('hex');
+  } else {
+    resolvedJwtSecret = 'ota_smart_secret_key_dev';
   }
 }
-const JWT_SECRET = process.env.JWT_SECRET || 'ota_smart_secret_key_dev';
+const JWT_SECRET = resolvedJwtSecret;
 
 function authenticateUser(req: express.Request): { authenticated: boolean; user?: any; error?: string } {
   const authHeader = req.headers.authorization || (req.query.token as string);
@@ -66,7 +87,7 @@ process.on('unhandledRejection', (reason) => {
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-developer-password');
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
@@ -90,15 +111,7 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: '25mb' }));
 
-// Persistent file storage directory
-const DATA_DIR = path.join(process.cwd(), 'data');
-const DATA_FILE = path.join(DATA_DIR, 'ota_store.json');
-
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-// Memory store backed by disk with debounced async persistence
+// Runtime in-memory cache strictly backed by Firebase Firestore (zero local disk storage)
 interface StoreData {
   version: number;
   keys: Record<string, any>;
@@ -109,69 +122,12 @@ let store: StoreData = {
   keys: {}
 };
 
-// Load existing data if available
-if (fs.existsSync(DATA_FILE)) {
-  try {
-    const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-    store = JSON.parse(raw);
-    if (!store.keys) store.keys = {};
-    if (!store.version) store.version = Date.now();
-    delete store.keys['app_state'];
-  } catch (e) {
-    console.error('Failed to parse store file, starting fresh', e);
-  }
+function saveStoreToDisk(_immediate = false) {
+  // No-op: All persistence is handled strictly in Firebase Firestore.
 }
 
-let saveTimer: any = null;
-function saveStoreToDisk(immediate = false) {
-  if (saveTimer) {
-    clearTimeout(saveTimer);
-    saveTimer = null;
-  }
-  const writeNow = () => {
-    try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-      }
-      fs.writeFileSync(DATA_FILE, JSON.stringify(store), 'utf-8');
-    } catch (e) {
-      console.error('Error writing store to disk:', e);
-    }
-  };
-  if (immediate) {
-    writeNow();
-  } else {
-    saveTimer = setTimeout(writeNow, 50);
-  }
-}
-
-// Multi-instance disk synchronization watcher
-function checkAndSyncFromDisk() {
-  if (fs.existsSync(DATA_FILE)) {
-    try {
-      const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-      const diskStore = JSON.parse(raw);
-      if (diskStore && diskStore.keys) {
-        const teachersChanged = JSON.stringify(diskStore.keys['ota_teachers_v3']) !== JSON.stringify(store.keys['ota_teachers_v3']);
-        const timetableChanged = JSON.stringify(diskStore.keys['ota_timetable_v2']) !== JSON.stringify(store.keys['ota_timetable_v2']);
-        const versionChanged = diskStore.version !== store.version;
-        if (versionChanged || teachersChanged || timetableChanged) {
-          store = diskStore;
-          populateServerVaultFromMemory();
-          return true;
-        }
-      }
-    } catch {}
-  }
+function checkAndSyncFromDisk(): boolean {
   return false;
-}
-
-if (fs.existsSync(DATA_DIR)) {
-  fs.watchFile(DATA_FILE, { interval: 250 }, (curr, prev) => {
-    if (curr.mtimeMs > prev.mtimeMs) {
-      checkAndSyncFromDisk();
-    }
-  });
 }
 
 // --- ONE-TIME PASSWORD HASH MIGRATION & SEEDING ON SERVER START ---
@@ -230,6 +186,21 @@ function runPasswordMigration() {
     console.log('[Auth Security] Migrated stored plain-text passwords & seeded default admin.');
     saveStoreToDisk();
   }
+}
+
+function isSyntheticTestTeacher(record: any): boolean {
+  if (!record || typeof record !== 'object') return true;
+  const id = String(record.id || '').toLowerCase();
+  const uname = String(record.username || '').toLowerCase().trim();
+  const name = String(record.name || '').toLowerCase().trim();
+  const email = String(record.contactEmail || record.email || '').toLowerCase().trim();
+  if (id.startsWith('tch_demo_') || id === 't_1793095260406_a8f1a4' || id === 't_1793633708715_af1a80') return true;
+  if (uname === 'qq' || name === 'qq') return true;
+  if (uname === 'adalovelace' || name === 'ada lovelace') return true;
+  if (uname.startsWith('sync_') || name.includes('alan turing')) return true;
+  if (uname.startsWith('matrix_') || name.includes('matrix faculty')) return true;
+  if (email.includes('matrix_teach_') || email.includes('sync_teach_') || email.endsWith('@otaacademy.edu')) return true;
+  return false;
 }
 
 function seedDefaultStoreData() {
@@ -350,16 +321,7 @@ function seedDefaultStoreData() {
   // Purge any fake, mock, or automated test teachers
   if (Array.isArray(store.keys['ota_teachers_v3'])) {
     const originalCount = store.keys['ota_teachers_v3'].length;
-    store.keys['ota_teachers_v3'] = store.keys['ota_teachers_v3'].filter((t: any) => {
-      if (!t) return false;
-      const uname = (t.username || '').toLowerCase();
-      const name = (t.name || '').toLowerCase();
-      if (uname === 'qq' || name === 'qq') return false;
-      if (uname.startsWith('sync_') || name.includes('alan turing')) return false;
-      if (uname.startsWith('matrix_') || name.includes('matrix faculty')) return false;
-      if (t.id === 't_1793095260406_a8f1a4' || t.id === 't_1793633708715_af1a80') return false;
-      return true;
-    });
+    store.keys['ota_teachers_v3'] = store.keys['ota_teachers_v3'].filter((t: any) => !isSyntheticTestTeacher(t));
     if (store.keys['ota_teachers_v3'].length !== originalCount) {
       modified = true;
     }
@@ -368,17 +330,7 @@ function seedDefaultStoreData() {
   // Purge any fake, mock, or automated test pending verifications
   if (Array.isArray(store.keys['ota_pending_verifications_v1'])) {
     const originalPending = store.keys['ota_pending_verifications_v1'].length;
-    store.keys['ota_pending_verifications_v1'] = store.keys['ota_pending_verifications_v1'].filter((p: any) => {
-      if (!p) return false;
-      const uname = (p.username || '').toLowerCase();
-      const name = (p.name || '').toLowerCase();
-      const email = (p.email || '').toLowerCase();
-      if (uname === 'qq' || name === 'qq') return false;
-      if (uname.startsWith('sync_') || name.includes('alan turing')) return false;
-      if (uname.startsWith('matrix_') || name.includes('matrix faculty')) return false;
-      if (email.includes('matrix_teach_') || email.includes('sync_teach_')) return false;
-      return true;
-    });
+    store.keys['ota_pending_verifications_v1'] = store.keys['ota_pending_verifications_v1'].filter((p: any) => !isSyntheticTestTeacher(p));
     if (store.keys['ota_pending_verifications_v1'].length !== originalPending) {
       modified = true;
     }
@@ -457,32 +409,37 @@ function seedDefaultStoreData() {
 
   // 8. Ensure Timetable metadata exists
   if (!store.keys['ota_timetable_metadata_v1'] || typeof store.keys['ota_timetable_metadata_v1'] !== 'object') {
-    const existingRev = (store.keys['ota_timetable_v2'] && typeof store.keys['ota_timetable_v2']._revisionId === 'number')
-      ? store.keys['ota_timetable_v2']._revisionId
-      : 1;
-    store.keys['ota_timetable_metadata_v1'] = {
-      revisionId: existingRev,
-      publishedAt: Date.now(),
-      publishedBy: 'System',
-      status: 'PUBLISHED'
-    };
-    if (store.keys['ota_timetable_v2'] && typeof store.keys['ota_timetable_v2'] === 'object' && !store.keys['ota_timetable_v2']._revisionId) {
-      store.keys['ota_timetable_v2']._revisionId = existingRev;
+    const tt = store.keys['ota_timetable_v2'];
+    const hasScheduledClasses = !!(tt && typeof tt === 'object' && Object.keys(tt).some(k => k !== '_revisionId'));
+    if (!hasScheduledClasses) {
+      store.keys['ota_timetable_metadata_v1'] = {
+        revisionId: 0,
+        publishedAt: 0,
+        publishedBy: '',
+        status: 'DRAFT'
+      };
+    } else {
+      const existingRev = typeof tt._revisionId === 'number' ? tt._revisionId : 1;
+      store.keys['ota_timetable_metadata_v1'] = {
+        revisionId: existingRev,
+        publishedAt: Date.now(),
+        publishedBy: 'System',
+        status: 'PUBLISHED'
+      };
+      if (!tt._revisionId) {
+        tt._revisionId = existingRev;
+      }
     }
     modified = true;
   }
 
   if (modified) {
-    console.log('[Server Seed] Seeded default store data.');
-    saveStoreToDisk();
+    console.log('[Server Seed] Seeded default baseline store data in memory.');
   }
 }
 
-runPasswordMigration();
-seedDefaultStoreData();
-
 // --- ENCRYPTED SERVER CREDENTIALS VAULT FOR MULTI-CONTAINER AUTHENTICATION ---
-// Cryptographically isolated AES-256-GCM vault with dedicated 32-byte key independent of JWT_SECRET
+// Stable AES-256-GCM vault key derived cleanly without writing local key files to ephemeral disk
 function getOrCreateVaultKey(): Buffer {
   if (process.env.CREDENTIAL_VAULT_KEY) {
     const raw = process.env.CREDENTIAL_VAULT_KEY.trim();
@@ -492,26 +449,8 @@ function getOrCreateVaultKey(): Buffer {
     return crypto.createHash('sha256').update(raw).digest();
   }
 
-  const localKeyPath = path.join(DATA_DIR, '.vault_key.local');
-  if (fs.existsSync(localKeyPath)) {
-    try {
-      const stored = fs.readFileSync(localKeyPath, 'utf-8').trim();
-      if (stored.length === 64 && /^[0-9a-fA-F]+$/.test(stored)) {
-        return Buffer.from(stored, 'hex');
-      }
-    } catch {}
-  }
-
-  const generatedKey = crypto.randomBytes(32);
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    fs.writeFileSync(localKeyPath, generatedKey.toString('hex'), { mode: 0o600 });
-  } catch (err) {
-    console.warn('[Server Vault] Notice: persisting .vault_key.local skipped, using memory key:', err);
-  }
-  return generatedKey;
+  const seedMaterial = `${firebaseConfigJson.projectId}:${firebaseConfigJson.firestoreDatabaseId || 'default'}:pentric_vault_v1`;
+  return crypto.createHash('sha256').update(seedMaterial).digest();
 }
 
 const CREDENTIAL_VAULT_KEY = getOrCreateVaultKey();
@@ -611,79 +550,96 @@ async function syncTeachersAndVaultToFirestore(teacherList?: any[]): Promise<boo
 
 async function hydrateStoreFromFirestore() {
   try {
-    const fetchDocsPromise = getDocs(collection(clientDb, 'ota_app_store'));
+    const fetchViaAdmin = async () => {
+      if (hasAdminCredentials && adminDb) {
+        return Promise.all([
+          adminDb.collection('ota_app_store').get(),
+          adminDb.collection('schools').get()
+        ]);
+      }
+      throw new Error('Admin credentials unavailable');
+    };
+    const fetchViaClient = () => Promise.all([
+      getDocs(collection(clientDb, 'ota_app_store')),
+      getDocs(collection(clientDb, 'schools'))
+    ]);
+    const fetchAllPromise = (hasAdminCredentials && adminDb)
+      ? fetchViaAdmin().catch(() => fetchViaClient())
+      : fetchViaClient();
     const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Firestore reachability timeout (operating offline with local data)')), 4000)
+      setTimeout(() => reject(new Error('Firestore reachability timeout')), 6000)
     );
-    const snap = await Promise.race([fetchDocsPromise, timeoutPromise]);
+    const [snap, schoolsSnap] = await Promise.race([fetchAllPromise, timeoutPromise]);
     let modified = false;
+
+    // First decrypt serverVault if present so teacher/admin passwords can attach immediately
+    const vaultDoc = snap.docs.find(d => d.id === 'ota_server_vault_v1');
+    if (vaultDoc && vaultDoc.data()?.payload?.encrypted) {
+      const decrypted = decryptVault(vaultDoc.data().payload);
+      if (decrypted && typeof decrypted === 'object') {
+        Object.assign(serverVault, decrypted);
+      }
+    }
 
     snap.docs.forEach(docSnap => {
       const key = docSnap.id;
+      if (key === 'app_state' || key === 'ota_server_vault_v1') return;
       const data = docSnap.data();
       if (!data || data.payload === undefined) return;
 
-      if (key === 'ota_server_vault_v1') {
-        if (data.payload && data.payload.encrypted) {
-          const decrypted = decryptVault(data.payload);
-          if (decrypted && typeof decrypted === 'object') {
-            Object.assign(serverVault, decrypted);
-          }
+      if (key === 'ota_pending_verifications_v1') {
+        if (Array.isArray(data.payload)) {
+          const now = Date.now();
+          data.payload.forEach((item: any) => {
+            if (item && item.email && item.expiresAt > now) {
+              pendingEmailVerifications.set(item.email, item);
+            }
+          });
         }
         return;
       }
 
       if (key === 'ota_teachers_v3') {
         const remoteList = Array.isArray(data.payload) ? data.payload : Object.values(data.payload || {});
-        let localList = Array.isArray(store.keys['ota_teachers_v3']) ? store.keys['ota_teachers_v3'] : Object.values(store.keys['ota_teachers_v3'] || {});
+        const mergedTeachers: any[] = [];
 
         remoteList.forEach((rt: any) => {
           if (!rt || !rt.id) return;
-          const existingIdx = localList.findIndex((lt: any) => lt && (lt.id === rt.id || lt.username === rt.username));
-          if (existingIdx >= 0) {
-            const preservedPassword = localList[existingIdx].password;
-            localList[existingIdx] = { ...rt };
-            if (preservedPassword && !localList[existingIdx].password) {
-              localList[existingIdx].password = preservedPassword;
-            }
-          } else {
-            localList.push(rt);
+          if (isSyntheticTestTeacher(rt)) {
+            delete serverVault[rt.id];
+            modified = true;
+            return;
           }
-          modified = true;
+          const tCopy = { ...rt };
+          if (!tCopy.password && serverVault[rt.id]?.passwordHash) {
+            tCopy.password = serverVault[rt.id].passwordHash;
+          }
+          mergedTeachers.push(tCopy);
         });
 
-        store.keys['ota_teachers_v3'] = localList;
+        store.keys['ota_teachers_v3'] = mergedTeachers;
+        modified = true;
         return;
       }
 
       if (key === 'ota_admins') {
         const remoteList = Array.isArray(data.payload) ? data.payload : Object.values(data.payload || {});
-        let localList = Array.isArray(store.keys['ota_admins']) ? store.keys['ota_admins'] : Object.values(store.keys['ota_admins'] || {});
+        const mergedAdmins: any[] = [];
 
         remoteList.forEach((ra: any) => {
           if (!ra || !ra.id) return;
-          const existingIdx = localList.findIndex((la: any) => la && (la.id === ra.id || la.username === ra.username));
-          if (existingIdx >= 0) {
-            const preservedPassword = localList[existingIdx].password;
-            localList[existingIdx] = { ...ra };
-            if (preservedPassword && !localList[existingIdx].password) {
-              localList[existingIdx].password = preservedPassword;
-            }
-          } else {
-            localList.push(ra);
+          const aCopy = { ...ra };
+          if (!aCopy.password && serverVault[ra.id]?.passwordHash) {
+            aCopy.password = serverVault[ra.id].passwordHash;
           }
-          modified = true;
+          if ((aCopy.username === 'admin' || aCopy.id === 'admin1') && !aCopy.password) {
+            aCopy.password = bcrypt.hashSync('admin123', 10);
+          }
+          mergedAdmins.push(aCopy);
         });
 
-        // Ensure default admin password if somehow missing
-        localList.forEach((la: any) => {
-          if (la && (la.username === 'admin' || la.id === 'admin1') && !la.password) {
-            la.password = bcrypt.hashSync('admin123', 10);
-            modified = true;
-          }
-        });
-
-        store.keys['ota_admins'] = localList;
+        store.keys['ota_admins'] = mergedAdmins;
+        modified = true;
         return;
       }
 
@@ -709,23 +665,36 @@ async function hydrateStoreFromFirestore() {
         return;
       }
 
-      if (store.keys[key] === undefined || (data.updatedAt && data.updatedAt > (store.version || 0))) {
-        store.keys[key] = data.payload;
-        modified = true;
-      }
+      store.keys[key] = data.payload;
+      modified = true;
     });
+
+    // Reconcile dedicated /schools collection docs with ota_schools_v1
+    if (schoolsSnap && !schoolsSnap.empty) {
+      const existingSchools = Array.isArray(store.keys['ota_schools_v1'])
+        ? [...store.keys['ota_schools_v1']]
+        : Object.values(store.keys['ota_schools_v1'] || {});
+      schoolsSnap.docs.forEach(sDoc => {
+        const sData = sDoc.data();
+        if (sData && sData.id && (sData.id === 'ota_total_academy' || String(sData.id).startsWith('sch_'))) {
+          const idx = existingSchools.findIndex((x: any) => x && x.id === sData.id);
+          if (idx >= 0) existingSchools[idx] = sData;
+          else existingSchools.push(sData);
+          modified = true;
+        }
+      });
+      store.keys['ota_schools_v1'] = existingSchools;
+    }
 
     if (modified) {
       store.version = Date.now();
-      saveStoreToDisk();
-      console.log('[Server Startup] Successfully hydrated persistent store from Cloud Firestore with multi-device merging!');
+      populateServerVaultFromMemory();
+      console.log('[Server Startup] Successfully hydrated authoritative store from Firebase Firestore!');
     }
   } catch (err: any) {
     console.warn('[Server Startup] Firestore hydration notice:', err?.message || err);
   }
 }
-
-hydrateStoreFromFirestore().catch(() => {});
 
 // Data Sanitization & Public vs Authorized Key Projections
 function sanitizeTeacherRecord(teacher: any, isPublic: boolean = false) {
@@ -768,8 +737,8 @@ const PUBLIC_EXPOSED_KEYS = [
   'ota_classes',
   'ota_subjects_v2',
   'ota_rooms',
-  'ota_settings',
-  'ota_theme_v1'
+  'ota_settings_v3',
+  'ota_theme'
 ];
 
 function getPublicKeys(): Record<string, any> {
@@ -777,6 +746,8 @@ function getPublicKeys(): Record<string, any> {
   for (const k of PUBLIC_EXPOSED_KEYS) {
     if (store.keys[k] !== undefined) {
       publicKeys[k] = store.keys[k];
+    } else if (k === 'ota_timetable_v2') {
+      publicKeys[k] = null;
     }
   }
   if (store.keys['ota_teachers_v3']) {
@@ -841,12 +812,21 @@ function getSanitizedKeys(role?: string, userId?: string): Record<string, any> {
       sanitized[k] = val;
     }
   }
+  if (sanitized['ota_timetable_v2'] === undefined) {
+    sanitized['ota_timetable_v2'] = null;
+  }
+  if (role === 'ADMIN' && sanitized['ota_timetable_draft_v1'] === undefined) {
+    sanitized['ota_timetable_draft_v1'] = null;
+  }
   return sanitized;
 }
 
 function filterPayloadForRole(payload: any, role: string, userId?: string): any {
   if (role === 'ADMIN') {
     const copy = { ...payload };
+    if (copy.key === 'ota_teachers_v3' && copy.data) {
+      copy.data = sanitizeTeacherRecord(copy.data, false);
+    }
     if (copy.changedKeys) {
       const filtered: Record<string, any> = {};
       for (const [k, v] of Object.entries(copy.changedKeys)) {
@@ -862,11 +842,20 @@ function filterPayloadForRole(payload: any, role: string, userId?: string): any 
       }
       copy.changedKeys = filtered;
     }
+    if (copy.keys) {
+      copy.keys = getSanitizedKeys('ADMIN');
+    }
     return copy;
   }
 
   const isTeacher = role === 'TEACHER';
   const copy = { ...payload };
+  if (copy.key === 'ota_teachers_v3' && copy.data) {
+    copy.data = sanitizeTeacherRecord(copy.data, !isTeacher);
+  }
+  if (copy.keys) {
+    copy.keys = getSanitizedKeys(role, userId);
+  }
   if (copy.changedKeys) {
     const filtered: Record<string, any> = {};
     for (const [k, v] of Object.entries(copy.changedKeys)) {
@@ -1013,6 +1002,79 @@ function recordLoginFailure(key: string) {
 
 function recordLoginSuccess(key: string) {
   loginRateLimits.delete(key);
+}
+
+/**
+ * Automatically binds a teacher to matching unassigned slots (or parallel split slots)
+ * on the active published timetable (and active draft, if any) without regenerating a batch.
+ */
+async function autoBindTeacherToActiveTimetables(teacher: any): Promise<{
+  publishedBoundCount: number;
+  draftBoundCount: number;
+  totalBoundCount: number;
+  changedKeys: Record<string, any>;
+}> {
+  const changedKeys: Record<string, any> = {};
+  let publishedBoundCount = 0;
+  let draftBoundCount = 0;
+
+  if (!teacher || !teacher.id) {
+    return { publishedBoundCount: 0, draftBoundCount: 0, totalBoundCount: 0, changedKeys };
+  }
+
+  const subjects = Array.isArray(store.keys['ota_subjects_v2'])
+    ? store.keys['ota_subjects_v2']
+    : Object.values(store.keys['ota_subjects_v2'] || ALL_SUBJECTS);
+  const classes = Array.isArray(store.keys['ota_classes'])
+    ? store.keys['ota_classes']
+    : Object.values(store.keys['ota_classes'] || ALL_CLASSES);
+
+  const pubGrid = store.keys['ota_timetable_v2'];
+  if (pubGrid && typeof pubGrid === 'object' && Object.keys(pubGrid).length > 0) {
+    const resPub = bindTeacherToTimetableGrid({
+      teacher,
+      grid: pubGrid,
+      subjects: subjects as any[],
+      classes: classes as any[]
+    });
+    if (resPub.updated && resPub.boundSlotsCount > 0) {
+      store.keys['ota_timetable_v2'] = resPub.grid;
+      publishedBoundCount = resPub.boundSlotsCount;
+      changedKeys['ota_timetable_v2'] = resPub.grid;
+      try {
+        await syncOtaStoreDocToFirestore('ota_timetable_v2', resPub.grid);
+      } catch (err) {
+        console.warn('[AutoBind] Failed syncing published timetable to Firestore:', err);
+      }
+    }
+  }
+
+  const draftGrid = store.keys['ota_timetable_draft_v1'];
+  if (draftGrid && typeof draftGrid === 'object' && Object.keys(draftGrid).length > 0) {
+    const resDraft = bindTeacherToTimetableGrid({
+      teacher,
+      grid: draftGrid,
+      subjects: subjects as any[],
+      classes: classes as any[]
+    });
+    if (resDraft.updated && resDraft.boundSlotsCount > 0) {
+      store.keys['ota_timetable_draft_v1'] = resDraft.grid;
+      draftBoundCount = resDraft.boundSlotsCount;
+      changedKeys['ota_timetable_draft_v1'] = resDraft.grid;
+      try {
+        await syncOtaStoreDocToFirestore('ota_timetable_draft_v1', resDraft.grid);
+      } catch (err) {
+        console.warn('[AutoBind] Failed syncing draft timetable to Firestore:', err);
+      }
+    }
+  }
+
+  return {
+    publishedBoundCount,
+    draftBoundCount,
+    totalBoundCount: publishedBoundCount + draftBoundCount,
+    changedKeys
+  };
 }
 
 app.post('/api/auth/login', async (req, res) => {
@@ -1330,6 +1392,19 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   if (matchedTeacher) {
+    let autoBoundCount = 0;
+    try {
+      const bindRes = await autoBindTeacherToActiveTimetables(matchedTeacher);
+      if (bindRes.totalBoundCount > 0) {
+        autoBoundCount = bindRes.publishedBoundCount;
+        store.version = Date.now();
+        broadcastToClients('update', {
+          version: store.version,
+          changedKeys: bindRes.changedKeys
+        });
+      }
+    } catch {}
+
     const mustChange = !!matchedTeacher.mustChangePassword;
     const userPayload = sanitizeTeacherRecord(matchedTeacher, false);
     const token = jwt.sign({ id: matchedTeacher.id, username: matchedTeacher.username || matchedTeacher.name, role: 'TEACHER' }, JWT_SECRET, { expiresIn: '7d' });
@@ -1342,12 +1417,13 @@ app.post('/api/auth/login', async (req, res) => {
       customTokenError: customTokenErrorMsg,
       role: 'TEACHER',
       user: userPayload,
-      mustChangePassword: mustChange
+      mustChangePassword: mustChange,
+      autoBoundCount
     });
   }
 });
 
-// --- ANTI-BOT EMAIL VERIFICATION INFRASTRUCTURE ---
+// --- ANTI-BOT EMAIL VERIFICATION INFRASTRUCTURE (FIRESTORE-ONLY) ---
 interface PendingEmailVerification {
   code: string;
   email: string;
@@ -1358,44 +1434,39 @@ interface PendingEmailVerification {
   lastSentAt: number;
 }
 
-const VERIFICATIONS_FILE = path.join(DATA_DIR, 'pending_verifications.json');
-
-function loadPendingVerifications(): Map<string, PendingEmailVerification> {
-  const map = new Map<string, PendingEmailVerification>();
-  if (fs.existsSync(VERIFICATIONS_FILE)) {
-    try {
-      const raw = JSON.parse(fs.readFileSync(VERIFICATIONS_FILE, 'utf-8'));
-      if (Array.isArray(raw)) {
-        const now = Date.now();
-        for (const item of raw) {
-          if (item && item.email && item.expiresAt > now) {
-            map.set(item.email, item);
-          }
-        }
-      }
-    } catch {}
-  }
-  return map;
-}
+const pendingEmailVerifications = new Map<string, PendingEmailVerification>();
+const emailSendingLocks = new Set<string>();
 
 function savePendingVerifications(map: Map<string, PendingEmailVerification>) {
-  try {
-    const list = Array.from(map.values()).filter(i => i.expiresAt > Date.now());
-    fs.writeFileSync(VERIFICATIONS_FILE, JSON.stringify(list), 'utf-8');
-    syncOtaStoreDocToFirestore('ota_pending_verifications_v1', list).catch(() => {});
-  } catch {}
+  const now = Date.now();
+  const list = Array.from(map.values()).filter(i => i.expiresAt > now);
+  syncOtaStoreDocToFirestore('ota_pending_verifications_v1', list).catch(() => {});
 }
-
-const pendingEmailVerifications = loadPendingVerifications();
-const emailSendingLocks = new Set<string>();
 
 // Real-Time Multi-Container Firestore Subscription
 function setupServerFirestoreListeners() {
   try {
     onSnapshot(collection(clientDb, 'ota_app_store'), (snapshot) => {
       let storeModified = false;
+      const changedBatch: Record<string, any> = {};
+
       snapshot.docChanges().forEach((change) => {
         const key = change.doc.id;
+        if (key === 'app_state') return;
+
+        if (change.type === 'removed') {
+          if (key === 'ota_pending_verifications_v1') {
+            pendingEmailVerifications.clear();
+            return;
+          }
+          if (store.keys[key] !== undefined) {
+            delete store.keys[key];
+            storeModified = true;
+            changedBatch[key] = null;
+          }
+          return;
+        }
+
         const data = change.doc.data();
         if (!data || data.payload === undefined) return;
 
@@ -1412,6 +1483,7 @@ function setupServerFirestoreListeners() {
         if (key === 'ota_pending_verifications_v1') {
           if (Array.isArray(data.payload)) {
             const now = Date.now();
+            pendingEmailVerifications.clear();
             data.payload.forEach((item: any) => {
               if (item && item.email && item.expiresAt > now) {
                 pendingEmailVerifications.set(item.email, item);
@@ -1427,7 +1499,7 @@ function setupServerFirestoreListeners() {
 
           const reconciled: any[] = [];
           remoteList.forEach((rt: any) => {
-            if (!rt || !rt.id) return;
+            if (!rt || !rt.id || isSyntheticTestTeacher(rt)) return;
             const existing = localList.find((lt: any) => lt && (lt.id === rt.id || lt.username === rt.username));
             const preservedPass = existing?.password;
             const merged = { ...rt };
@@ -1440,47 +1512,112 @@ function setupServerFirestoreListeners() {
             reconciled.push(merged);
           });
 
-          const localIds = localList.map((t: any) => t?.id).sort().join(',');
-          const reconciledIds = reconciled.map((t: any) => t?.id).sort().join(',');
-          const hasChanged = localIds !== reconciledIds || JSON.stringify(localList) !== JSON.stringify(reconciled);
-
-          if (hasChanged) {
+          if (JSON.stringify(localList) !== JSON.stringify(reconciled)) {
             store.keys['ota_teachers_v3'] = reconciled;
             storeModified = true;
-            broadcastToClients('update', {
-              version: store.version,
-              key: 'ota_teachers_v3',
-              changedKeys: { ota_teachers_v3: reconciled }
-            });
+            changedBatch['ota_teachers_v3'] = reconciled.map((t: any) => sanitizeTeacherRecord(t, false));
           }
           return;
         }
 
-        // Other keys (e.g. ota_timetable_v2, ota_timetable_metadata_v1, ota_admins, ota_schools_v1)
+        if (key === 'ota_admins') {
+          const remoteList = Array.isArray(data.payload) ? data.payload : Object.values(data.payload || {});
+          let localList = Array.isArray(store.keys['ota_admins']) ? store.keys['ota_admins'] : Object.values(store.keys['ota_admins'] || {});
+          const reconciled: any[] = [];
+          remoteList.forEach((ra: any) => {
+            if (!ra || !ra.id) return;
+            const existing = localList.find((la: any) => la && (la.id === ra.id || la.username === ra.username));
+            const preservedPass = existing?.password;
+            const merged = { ...ra };
+            if (preservedPass && !merged.password) {
+              merged.password = preservedPass;
+            }
+            if (!merged.password && serverVault[ra.id]?.passwordHash) {
+              merged.password = serverVault[ra.id].passwordHash;
+            }
+            reconciled.push(merged);
+          });
+          if (JSON.stringify(localList) !== JSON.stringify(reconciled)) {
+            store.keys['ota_admins'] = reconciled;
+            storeModified = true;
+            changedBatch['ota_admins'] = reconciled.map(sanitizeAdminRecord);
+          }
+          return;
+        }
+
         if (JSON.stringify(store.keys[key]) !== JSON.stringify(data.payload)) {
           store.keys[key] = data.payload;
           storeModified = true;
-          broadcastToClients('update', {
-            version: store.version,
-            key,
-            changedKeys: { [key]: data.payload }
-          });
+          changedBatch[key] = data.payload;
         }
       });
 
       if (storeModified) {
         store.version = Date.now();
-        saveStoreToDisk();
+        broadcastToClients('update', {
+          version: store.version,
+          changedKeys: changedBatch
+        });
       }
     }, (err) => {
       console.warn('[Server Firestore Real-time Listener Notice]', err?.message || err);
+    });
+
+    // Also subscribe to dedicated /schools collection so manual registrations/deletions sync across instances
+    onSnapshot(collection(clientDb, 'schools'), (snapshot) => {
+      const existingRaw = Array.isArray(store.keys['ota_schools_v1'])
+        ? [...store.keys['ota_schools_v1']]
+        : Object.values(store.keys['ota_schools_v1'] || {});
+      let changed = false;
+
+      snapshot.docChanges().forEach((change) => {
+        const sData = change.doc.data();
+        const sId = sData?.id || change.doc.id;
+        if (!sId || sId === 'ota_total_academy') return;
+        if (change.type === 'removed') {
+          const next = existingRaw.filter((s: any) => s && s.id !== sId);
+          if (next.length !== existingRaw.length) {
+            existingRaw.splice(0, existingRaw.length, ...next);
+            changed = true;
+          }
+        } else if (sData && sData.name) {
+          const idx = existingRaw.findIndex((s: any) => s && s.id === sId);
+          if (idx >= 0) {
+            if (JSON.stringify(existingRaw[idx]) !== JSON.stringify(sData)) {
+              existingRaw[idx] = sData;
+              changed = true;
+            }
+          } else {
+            existingRaw.push(sData);
+            changed = true;
+          }
+        }
+      });
+
+      if (changed) {
+        store.keys['ota_schools_v1'] = existingRaw;
+        store.version = Date.now();
+        broadcastToClients('update', {
+          version: store.version,
+          changedKeys: { ota_schools_v1: existingRaw }
+        });
+      }
+    }, (err) => {
+      console.warn('[Server Firestore Schools Listener Notice]', err?.message || err);
     });
   } catch (err) {
     console.warn('[Server Firestore Listener Setup Notice]', err);
   }
 }
 
-setupServerFirestoreListeners();
+// Lightweight Render / Load Balancer Health Check Endpoint
+app.get('/api/health', (_req, res) => {
+  return res.status(200).json({
+    status: 'ok',
+    timestamp: Date.now(),
+    uptime: process.uptime()
+  });
+});
 
 // System Readiness & Health Check Endpoint
 app.get('/api/ready', (req, res) => {
@@ -1550,7 +1687,6 @@ function buildEmailTemplate({
   </style>
 </head>
 <body>
-  ${preheader ? `<div style="display:none;font-size:1px;color:#f1f5f9;line-height:1px;max-height:0px;max-width:0px;opacity:0;overflow:hidden;">${preheader}</div>` : ''}
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#f1f5f9;padding:24px 12px;">
     <tr>
       <td align="center">
@@ -1601,10 +1737,7 @@ function buildEmailTemplate({
               <span>Intelligent Academic Scheduling</span>
             </div>
             <p style="margin: 0 0 6px 0; color: #94a3b8; font-size: 11px;">
-              ${footerNote || 'This is an official system transmission. If you did not request this communication, please contact your school administrator immediately.'}
-            </p>
-            <p style="margin: 0; color: #cbd5e1; font-size: 10px;">
-              Security standard: SHA-256 TLS Encrypted • Anti-Imposter Faculty Protection
+              ${footerNote || 'This is an official system notice. If you did not request this email, you may safely ignore it.'}
             </p>
           </div>
         </div>
@@ -1628,12 +1761,30 @@ async function sendEmailMessage({
   html: string;
   text: string;
   fromName?: string;
-}): Promise<{ success: boolean; error?: string; simulated?: boolean }> {
-  // 1. Resend API via HTTPS (Essential on hosting environments like Render that block SMTP ports)
+}): Promise<{ success: boolean; error?: string; transport?: 'resend' | 'smtp'; sender?: string }> {
   const resendApiKey = (process.env.RESEND_API_KEY || '').trim();
-  if (resendApiKey) {
+  const rawFrom = (process.env.RESEND_FROM || process.env.EMAIL_FROM || '').trim().replace(/^["']|["']$/g, '');
+  const angleMatch = rawFrom.match(/<([^>\s]+@[^>\s]+)>/);
+  const plainEmail = rawFrom.match(/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/);
+  const candidateEmail = angleMatch ? angleMatch[1] : (plainEmail ? rawFrom : '');
+  const isPublicFreeMail = /@(gmail|yahoo|outlook|hotmail|live|aol|icloud)\.com$/i.test(candidateEmail);
+  const hasVerifiedResendDomain = Boolean(resendApiKey && candidateEmail && !isPublicFreeMail);
+  const resolvedResendEmail = hasVerifiedResendDomain ? candidateEmail : 'onboarding@resend.dev';
+
+  const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
+  const smtpUser = (process.env.SMTP_USER || '').trim();
+  const smtpPass = (process.env.SMTP_PASS || '').trim();
+  const smtpPort = Number(process.env.SMTP_PORT || 587);
+  const hasSmtp = Boolean(smtpUser && smtpPass);
+  const isGmail = smtpHost.toLowerCase().includes('gmail');
+  const rawSmtpFrom = (process.env.SMTP_FROM || '').trim();
+  const smtpFrom = (isGmail || !rawSmtpFrom)
+    ? `"${fromName}" <${smtpUser || 'noreply@pentric.edu'}>`
+    : rawSmtpFrom;
+
+  const tryResend = async (): Promise<{ success: boolean; error?: string; transport?: 'resend'; sender?: string }> => {
+    if (!resendApiKey) return { success: false, error: 'RESEND_API_KEY not set' };
     try {
-      const fromEmail = (process.env.RESEND_FROM || process.env.EMAIL_FROM || 'onboarding@resend.dev').trim();
       const res = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
@@ -1641,7 +1792,7 @@ async function sendEmailMessage({
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          from: `${fromName} <${fromEmail}>`,
+          from: `${fromName} <${resolvedResendEmail}>`,
           to: [to],
           subject,
           html,
@@ -1651,71 +1802,104 @@ async function sendEmailMessage({
       });
       const data: any = await res.json().catch(() => ({}));
       if (res.ok) {
-        console.log(`[Email Dispatcher] Email accepted by Resend for ${to}`);
-        return { success: true };
-      } else {
-        const errorMsg = data?.message || `Resend API returned status ${res.status}`;
-        console.warn(`[Email Dispatcher] Resend API notice for ${to}: ${errorMsg}. Falling back to dev verification code simulation.`);
-        return { success: true, simulated: true };
+        console.log(`[Email Dispatcher] Email accepted by Resend for ${to} (from: ${resolvedResendEmail})`);
+        return { success: true, transport: 'resend', sender: resolvedResendEmail };
       }
+      const errorMsg = data?.message || `Resend API returned status ${res.status}`;
+      console.warn(`[Email Dispatcher] Resend API declined ${to}: ${errorMsg}`);
+      return { success: false, error: `Email delivery rejected by Resend: ${errorMsg}` };
     } catch (e: any) {
-      console.warn(`[Email Dispatcher] Resend dispatch notice: ${e?.message}. Falling back to dev verification code simulation.`);
-      return { success: true, simulated: true };
+      console.warn(`[Email Dispatcher] Resend dispatch notice for ${to}: ${e?.message}`);
+      return { success: false, error: e?.message || 'Resend email dispatch failed' };
     }
-  }
+  };
 
-  // 2. Bounded SMTP Transport Fallback (Strict 7s socket/connection timeout)
-  const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
-  const smtpUser = (process.env.SMTP_USER || '').trim();
-  const smtpPass = (process.env.SMTP_PASS || '').trim();
-  const smtpPort = Number(process.env.SMTP_PORT || 587);
-  const smtpFrom = process.env.SMTP_FROM || `"${fromName}" <${smtpUser || 'noreply@pentric.edu'}>`;
+  const trySmtp = async (): Promise<{ success: boolean; error?: string; transport?: 'smtp'; sender?: string }> => {
+    if (!hasSmtp) return { success: false, error: 'SMTP credentials not set' };
+    try {
+      const transporter = isGmail
+        ? nodemailer.createTransport({
+            service: 'gmail',
+            auth: { user: smtpUser, pass: smtpPass },
+            connectionTimeout: 7000,
+            greetingTimeout: 7000,
+            socketTimeout: 7000
+          })
+        : nodemailer.createTransport({
+            host: smtpHost,
+            port: smtpPort,
+            secure: smtpPort === 465,
+            auth: { user: smtpUser, pass: smtpPass },
+            connectionTimeout: 7000,
+            greetingTimeout: 7000,
+            socketTimeout: 7000
+          });
 
-  if (!smtpPass && !resendApiKey) {
-    console.info(`[Email Dispatcher] Outbound email credentials unconfigured. Simulating delivery for: ${to}`);
+      const info = await transporter.sendMail({
+        from: smtpFrom,
+        replyTo: smtpUser,
+        to,
+        subject,
+        text,
+        html
+      });
+
+      const rejected = Array.isArray(info?.rejected) ? info.rejected : [];
+      const accepted = Array.isArray(info?.accepted) ? info.accepted : [];
+      if (rejected.length > 0 || accepted.length === 0) {
+        const rejectReason = `SMTP server did not accept recipient ${to} (response: ${info?.response || 'none'})`;
+        console.warn(`[Email Dispatcher] ${rejectReason}`);
+        return { success: false, error: rejectReason };
+      }
+
+      console.log(`[Email Dispatcher] Email dispatched via SMTP (${smtpUser}) to ${to} [msgId=${info.messageId}, resp=${info.response}]`);
+      return { success: true, transport: 'smtp', sender: smtpUser };
+    } catch (err: any) {
+      console.warn(`[Email Dispatcher] Outbound SMTP notice for ${to}: ${err?.message}`);
+      return { success: false, error: err?.message || 'Outbound email delivery failed' };
+    }
+  };
+
+  if (!resendApiKey && !hasSmtp) {
+    console.warn(`[Email Dispatcher] Outbound email credentials unconfigured for: ${to}`);
     return {
-      success: true,
-      simulated: true
+      success: false,
+      error: 'Email delivery service is not configured on this server. Set RESEND_API_KEY or SMTP_USER and SMTP_PASS in your environment.'
     };
   }
 
-  try {
-    const isGmail = smtpHost.toLowerCase().includes('gmail');
-    const transporter = isGmail
-      ? nodemailer.createTransport({
-          service: 'gmail',
-          auth: { user: smtpUser, pass: smtpPass },
-          connectionTimeout: 7000,
-          greetingTimeout: 7000,
-          socketTimeout: 7000
-        })
-      : nodemailer.createTransport({
-          host: smtpHost,
-          port: smtpPort,
-          secure: smtpPort === 465,
-          auth: { user: smtpUser, pass: smtpPass },
-          connectionTimeout: 7000,
-          greetingTimeout: 7000,
-          socketTimeout: 7000
-        });
+  // If Resend has a verified custom domain, try Resend first (reliable even where SMTP ports are blocked).
+  // Otherwise, when Resend is restricted to its sandbox sender (onboarding@resend.dev), prefer SMTP first
+  // so verification emails can reach any recipient address.
+  if (hasVerifiedResendDomain || !hasSmtp) {
+    const resendResult = await tryResend();
+    if (resendResult.success) return resendResult;
 
-    await transporter.sendMail({
-      from: smtpFrom,
-      to,
-      subject,
-      text,
-      html
-    });
-
-    console.log(`[Email Dispatcher] Email dispatched via SMTP to ${to}`);
-    return { success: true };
-  } catch (err: any) {
-    console.warn(`[Email Dispatcher] Outbound SMTP notice for ${to}: ${err?.message}`);
-    return { success: false, error: err?.message || 'Outbound email delivery failed' };
+    if (hasSmtp) {
+      const smtpResult = await trySmtp();
+      if (smtpResult.success) return smtpResult;
+      return { success: false, error: smtpResult.error || resendResult.error };
+    }
+    return resendResult;
   }
+
+  // Prefer SMTP first when Resend is unverified/sandboxed
+  const smtpResult = await trySmtp();
+  if (smtpResult.success) return smtpResult;
+
+  if (resendApiKey) {
+    const resendResult = await tryResend();
+    if (resendResult.success) return resendResult;
+    return {
+      success: false,
+      error: `${smtpResult.error || 'SMTP delivery failed'}. Resend fallback also rejected external recipient because no custom domain is verified at resend.com/domains.`
+    };
+  }
+
+  return smtpResult;
 }
 
-async function sendVerificationEmail(recipientEmail: string, code: string, recipientName?: string): Promise<{ success: boolean; error?: string; simulated?: boolean }> {
+async function sendVerificationEmail(recipientEmail: string, code: string, recipientName?: string): Promise<{ success: boolean; error?: string; transport?: 'resend' | 'smtp'; sender?: string }> {
   const digits = code.split('');
   const digitsHtml = digits.map(d => `
     <td align="center" style="padding: 0 4px;">
@@ -1725,7 +1909,7 @@ async function sendVerificationEmail(recipientEmail: string, code: string, recip
     </td>
   `).join('');
 
-  const subject = `🔐 Verification Code: ${code} — Pentric Academic Portal`;
+  const subject = `Pentric Verification Code: ${code}`;
   const textContent = `Hello ${recipientName || 'Faculty Member'},\n\n` +
     `Your 6-digit verification code for Pentric Academic Timetable is:\n\n` +
     `  ${code}\n\n` +
@@ -1794,11 +1978,6 @@ app.post('/api/notifications/send-email', async (req, res) => {
   }
 
   const cleanEmail = recipientEmail.trim().toLowerCase();
-  const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
-  const smtpUser = (process.env.SMTP_USER || 'proxbott@gmail.com').trim();
-  const smtpPass = (process.env.SMTP_PASS || '').trim();
-  const smtpPort = Number(process.env.SMTP_PORT || 587);
-  const smtpFrom = process.env.SMTP_FROM || `"Pentric Timetable" <${smtpUser}>`;
 
   const isAlert = category === 'ALERT' || (title && title.toUpperCase().includes('ALERT'));
   const accentColor = isAlert ? '#dc2626' : category === 'REQUEST' ? '#7c3aed' : '#2563eb';
@@ -1984,17 +2163,18 @@ app.post('/api/auth/send-verification-code', async (req, res) => {
 
     const mailResult = await sendVerificationEmail(cleanEmail, code, name);
     if (!mailResult.success) {
-      // CRITICAL P1-7: Clear pending verification state so no cooldown or valid code is left behind on delivery failure
+      // Clear pending verification state so no cooldown or valid code is left behind on delivery failure
       pendingEmailVerifications.delete(cleanEmail);
-      savePendingVerifications(pendingEmailVerifications);
+      await updateOtaStoreListInFirestore('ota_pending_verifications_v1', (list: any[]) =>
+        list.filter((i: any) => i && i.email !== cleanEmail && i.expiresAt > now)
+      );
       return res.status(502).json({
         success: false,
         error: mailResult.error || 'Failed to deliver verification email. Please check your email address or try again.'
       });
     }
 
-    // Only set valid code and cooldown AFTER delivery confirms acceptance
-    pendingEmailVerifications.set(cleanEmail, {
+    const record: PendingEmailVerification = {
       code,
       email: cleanEmail,
       name: name ? String(name).trim() : undefined,
@@ -2002,14 +2182,21 @@ app.post('/api/auth/send-verification-code', async (req, res) => {
       expiresAt: now + 15 * 60 * 1000, // 15 mins expiry
       attempts: 0,
       lastSentAt: now
-    });
-    savePendingVerifications(pendingEmailVerifications);
+    };
+    pendingEmailVerifications.set(cleanEmail, record);
 
+    await updateOtaStoreListInFirestore('ota_pending_verifications_v1', (list: any[]) => {
+      const filtered = list.filter((i: any) => i && i.email !== cleanEmail && i.expiresAt > now);
+      filtered.push(record);
+      return filtered;
+    });
+
+    // NEVER return verification code or devCode in HTTP response
     return res.json({
       success: true,
-      message: `A 6-digit verification code has been dispatched to ${cleanEmail}.`,
-      simulated: mailResult.simulated,
-      devCode: mailResult.simulated ? code : undefined
+      transport: mailResult.transport,
+      sender: mailResult.sender,
+      message: `A 6-digit verification code has been dispatched to ${cleanEmail}${mailResult.sender ? ` from ${mailResult.sender}` : ''}. Check your inbox, Updates, or Spam folder.`
     });
   } finally {
     emailSendingLocks.delete(cleanEmail);
@@ -2029,9 +2216,9 @@ app.post('/api/auth/verify-code', async (req, res) => {
   let record = pendingEmailVerifications.get(cleanEmail);
   if (!record) {
     try {
-      const snap = await getDoc(doc(clientDb, 'ota_app_store', 'ota_pending_verifications_v1'));
-      if (snap.exists() && Array.isArray(snap.data()?.payload)) {
-        const found = snap.data().payload.find((item: any) => item && item.email === cleanEmail && item.expiresAt > Date.now());
+      const payload = await getOtaStoreDocFromFirestore('ota_pending_verifications_v1');
+      if (Array.isArray(payload)) {
+        const found = payload.find((item: any) => item && item.email === cleanEmail && item.expiresAt > Date.now());
         if (found) {
           pendingEmailVerifications.set(cleanEmail, found);
           record = found;
@@ -2045,16 +2232,19 @@ app.post('/api/auth/verify-code', async (req, res) => {
 
   if (Date.now() > record.expiresAt) {
     pendingEmailVerifications.delete(cleanEmail);
+    savePendingVerifications(pendingEmailVerifications);
     return res.status(400).json({ success: false, error: 'Verification code has expired. Please request a new one.' });
   }
 
   if (record.attempts >= 5) {
     pendingEmailVerifications.delete(cleanEmail);
+    savePendingVerifications(pendingEmailVerifications);
     return res.status(400).json({ success: false, error: 'Too many failed attempts. Please request a new code.' });
   }
 
   if (record.code !== cleanCode) {
     record.attempts++;
+    savePendingVerifications(pendingEmailVerifications);
     return res.status(400).json({ 
       success: false, 
       error: `Invalid code. ${5 - record.attempts} attempt(s) remaining.` 
@@ -2062,6 +2252,42 @@ app.post('/api/auth/verify-code', async (req, res) => {
   }
 
   return res.json({ success: true, message: 'Code verified successfully.' });
+});
+
+// Public Approval Status Poll Route (Used by pending teacher waiting room on Device B)
+app.get('/api/auth/approval-status', async (req, res) => {
+  const teacherId = typeof req.query.teacherId === 'string' ? req.query.teacherId.trim() : '';
+  const username = typeof req.query.username === 'string' ? req.query.username.trim().toLowerCase() : '';
+  if (!teacherId && !username) {
+    return res.status(400).json({ success: false, error: 'teacherId or username required' });
+  }
+
+  let teachersObj = store.keys['ota_teachers_v3'] || [];
+  let list: any[] = Array.isArray(teachersObj) ? teachersObj : Object.values(teachersObj);
+  let match = list.find((t: any) => t && ((teacherId && t.id === teacherId) || (username && (t.username || '').toLowerCase() === username)));
+
+  if (!match) {
+    try {
+      const remote = await getOtaStoreDocFromFirestore('ota_teachers_v3');
+      if (Array.isArray(remote)) {
+        match = remote.find((t: any) => t && ((teacherId && t.id === teacherId) || (username && (t.username || '').toLowerCase() === username)));
+      }
+    } catch {}
+  }
+
+  if (!match) {
+    return res.json({ success: true, status: 'NOT_FOUND' });
+  }
+
+  const status = match.isApproved && match.approvalStatus === 'APPROVED'
+    ? 'APPROVED'
+    : (match.approvalStatus === 'REJECTED' ? 'REJECTED' : 'PENDING');
+
+  return res.json({
+    success: true,
+    status,
+    rejectionReason: match.rejectionReason
+  });
 });
 
 // Signup Route with Anti-Bot 6-Digit Email Verification
@@ -2089,13 +2315,13 @@ app.post('/api/auth/signup', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Password must be at least 4 characters long.' });
   }
 
-  // Verify the 6-digit code against pending verifications (with Firestore fallback for cross-container support)
+  // Verify the 6-digit code against pending verifications (Firestore-backed for multi-container support)
   let record = pendingEmailVerifications.get(cleanEmail);
   if (!record) {
     try {
-      const snap = await getDoc(doc(clientDb, 'ota_app_store', 'ota_pending_verifications_v1'));
-      if (snap.exists() && Array.isArray(snap.data()?.payload)) {
-        const found = snap.data().payload.find((item: any) => item && item.email === cleanEmail && item.expiresAt > Date.now());
+      const payload = await getOtaStoreDocFromFirestore('ota_pending_verifications_v1');
+      if (Array.isArray(payload)) {
+        const found = payload.find((item: any) => item && item.email === cleanEmail && item.expiresAt > Date.now());
         if (found) {
           pendingEmailVerifications.set(cleanEmail, found);
           record = found;
@@ -2109,21 +2335,42 @@ app.post('/api/auth/signup', async (req, res) => {
 
   if (Date.now() > record.expiresAt) {
     pendingEmailVerifications.delete(cleanEmail);
+    savePendingVerifications(pendingEmailVerifications);
     return res.status(400).json({ success: false, error: 'Verification code has expired. Please request a new one.' });
   }
 
   if (record.attempts >= 5) {
     pendingEmailVerifications.delete(cleanEmail);
+    savePendingVerifications(pendingEmailVerifications);
     return res.status(400).json({ success: false, error: 'Too many failed verification attempts. Please request a new code.' });
   }
 
   if (record.code !== cleanCode) {
     record.attempts++;
+    savePendingVerifications(pendingEmailVerifications);
     return res.status(400).json({ success: false, error: `Invalid verification code (${5 - record.attempts} attempts left). Check your email.` });
   }
 
-  // Code verified! Remove from pending
+  // Code verified! Remove from pending in memory and Firestore
   pendingEmailVerifications.delete(cleanEmail);
+  await updateOtaStoreListInFirestore('ota_pending_verifications_v1', (list: any[]) =>
+    list.filter((i: any) => i && i.email !== cleanEmail && i.expiresAt > Date.now())
+  );
+
+  // Pull latest teachers from Firestore first so duplicate check never uses stale container memory
+  try {
+    const latestRemoteTeachers = await getOtaStoreDocFromFirestore('ota_teachers_v3');
+    if (Array.isArray(latestRemoteTeachers)) {
+      const currentMem = Array.isArray(store.keys['ota_teachers_v3']) ? store.keys['ota_teachers_v3'] : [];
+      const merged: any[] = [];
+      latestRemoteTeachers.forEach((rt: any) => {
+        if (!rt || !rt.id) return;
+        const localMatch = currentMem.find((lt: any) => lt && lt.id === rt.id);
+        merged.push({ ...rt, password: rt.password || localMatch?.password || serverVault[rt.id]?.passwordHash });
+      });
+      store.keys['ota_teachers_v3'] = merged;
+    }
+  } catch {}
 
   const teachersObj = store.keys['ota_teachers_v3'] || {};
   let currentTeacherList: any[] = Array.isArray(teachersObj) ? [...teachersObj] : Object.values(teachersObj);
@@ -2164,12 +2411,13 @@ app.post('/api/auth/signup', async (req, res) => {
   };
 
   const schoolId = req.body.schoolId || 'ota_total_academy';
+  const passwordHash = bcrypt.hashSync(rawPass, 10);
 
   const newTeacher = {
     id: newTeacherId,
     name: cleanName,
     username: cleanUser,
-    password: bcrypt.hashSync(rawPass, 10),
+    password: passwordHash,
     recoveryCode,
     calendarToken,
     subjectsTaught: [],
@@ -2186,13 +2434,32 @@ app.post('/api/auth/signup', async (req, res) => {
     registeredAt: Date.now()
   };
 
-  const existingIdx = currentTeacherList.findIndex(t => t && (t.id === newTeacherId || t.username === cleanUser));
-  if (existingIdx >= 0) {
-    currentTeacherList[existingIdx] = newTeacher;
+  serverVault[newTeacherId] = {
+    passwordHash,
+    role: 'TEACHER',
+    email: cleanEmail,
+    username: cleanUser
+  };
+
+  const safeTeacherForFirestore = sanitizeTeacherRecord(newTeacher, false);
+
+  // Transactional Firestore update guarantees concurrent signups never overwrite each other
+  const txTeachers = await updateOtaStoreListInFirestore('ota_teachers_v3', (remoteList: any[]) => {
+    const filtered = remoteList.filter((t: any) => t && t.id !== newTeacherId);
+    filtered.push(safeTeacherForFirestore);
+    return filtered;
+  });
+
+  if (txTeachers) {
+    store.keys['ota_teachers_v3'] = txTeachers.map((rt: any) => {
+      if (rt.id === newTeacherId) return newTeacher;
+      const existingMem = currentTeacherList.find((lt: any) => lt && lt.id === rt.id);
+      return { ...rt, password: existingMem?.password || serverVault[rt.id]?.passwordHash };
+    });
   } else {
     currentTeacherList.push(newTeacher);
+    store.keys['ota_teachers_v3'] = currentTeacherList;
   }
-  store.keys['ota_teachers_v3'] = currentTeacherList;
 
   // Anti-Imposter Protection: Send instant notification and alert to Administration
   const adminAlert = {
@@ -2207,26 +2474,23 @@ app.post('/api/auth/signup', async (req, res) => {
     timestamp: Date.now()
   };
 
-  let notifList: any[] = [];
-  if (Array.isArray(store.keys['ota_notifications_v2'])) {
-    notifList = [...store.keys['ota_notifications_v2']];
-  } else if (store.keys['ota_notifications_v2'] && typeof store.keys['ota_notifications_v2'] === 'object') {
-    notifList = Object.values(store.keys['ota_notifications_v2']);
+  const txNotifs = await updateOtaStoreListInFirestore('ota_notifications_v2', (remoteNotifs: any[]) => {
+    const next = [adminAlert, ...remoteNotifs.filter((n: any) => n && n.id !== adminAlert.id)];
+    return next.slice(0, 300);
+  });
+  if (txNotifs) {
+    store.keys['ota_notifications_v2'] = txNotifs;
+  } else {
+    let notifList: any[] = Array.isArray(store.keys['ota_notifications_v2']) ? [...store.keys['ota_notifications_v2']] : [];
+    notifList.unshift(adminAlert);
+    store.keys['ota_notifications_v2'] = notifList;
   }
-  notifList.unshift(adminAlert);
-  store.keys['ota_notifications_v2'] = notifList;
 
   store.version = Date.now();
-  saveStoreToDisk(true);
-
-  try {
-    await syncTeachersAndVaultToFirestore(currentTeacherList);
-    await syncOtaStoreDocToFirestore('ota_notifications_v2', notifList);
-  } catch (err) {
-    // Disk store persistence is active
-  }
+  await syncOtaStoreDocToFirestore('ota_server_vault_v1', encryptVault(serverVault));
 
   const safeTeacher = sanitizeTeacherRecord(newTeacher, false);
+  const adminSanitized = getSanitizedKeys('ADMIN');
 
   // Broadcast the new teacher and notification immediately to admins and active tabs
   broadcastToClients('update', {
@@ -2235,8 +2499,8 @@ app.post('/api/auth/signup', async (req, res) => {
     item_id: newTeacherId,
     data: safeTeacher,
     changedKeys: {
-      ota_teachers_v3: currentTeacherList,
-      ota_notifications_v2: notifList
+      ota_teachers_v3: adminSanitized['ota_teachers_v3'],
+      ota_notifications_v2: adminSanitized['ota_notifications_v2']
     }
   });
 
@@ -2289,11 +2553,23 @@ function scrubTeacherFromTimetable(teacherId: string): boolean {
 }
 
 // Admin Teacher Approval Endpoint (Anti-Imposter Protection)
-app.post('/api/teachers/approve', requireAdmin, (req, res) => {
+app.post('/api/teachers/approve', requireAdmin, async (req, res) => {
   const { teacherId, action, reason, adminName } = req.body;
   if (!teacherId || !action) {
     return res.status(400).json({ success: false, error: 'teacherId and action are required' });
   }
+
+  // Ensure latest list from Firestore before deciding
+  try {
+    const remoteTeachers = await getOtaStoreDocFromFirestore('ota_teachers_v3');
+    if (Array.isArray(remoteTeachers)) {
+      const memList: any[] = Array.isArray(store.keys['ota_teachers_v3']) ? store.keys['ota_teachers_v3'] : Object.values(store.keys['ota_teachers_v3'] || {});
+      store.keys['ota_teachers_v3'] = remoteTeachers.map((rt: any) => {
+        const lt = memList.find((x: any) => x && x.id === rt.id);
+        return { ...rt, password: lt?.password || serverVault[rt.id]?.passwordHash };
+      });
+    }
+  } catch {}
 
   const teachersObj = store.keys['ota_teachers_v3'] || {};
   let teacherList: any[] = Array.isArray(teachersObj) ? teachersObj : Object.values(teachersObj);
@@ -2304,110 +2580,173 @@ app.post('/api/teachers/approve', requireAdmin, (req, res) => {
   }
 
   const actor = adminName || 'School Administrator';
+  let newNotif: any = null;
+  let newAudit: any = null;
+  let timetableChanged = false;
 
-  if (action === 'APPROVE') {
-    if (teacher) {
-      teacher.isApproved = true;
-      teacher.approvalStatus = 'APPROVED';
-      delete teacher.rejectionReason;
+  if (action === 'APPROVE' && teacher) {
+    teacher.isApproved = true;
+    teacher.approvalStatus = 'APPROVED';
+    delete teacher.rejectionReason;
 
-      // Send confirmation notification to teacher
-      const note = {
-        id: 'notif_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-        recipientId: teacher.id,
-        title: 'Staff Verification Approved ✅',
-        message: `Your faculty account has been verified by ${actor}. You now have full access to your school timetable.`,
-        details: 'Anti-imposter verification successfully cleared.',
-        isRead: false,
-        timestamp: Date.now(),
-        type: 'SUCCESS',
-        category: 'SYSTEM'
-      };
-      if (!store.keys['ota_notifications_v2']) store.keys['ota_notifications_v2'] = [];
-      if (Array.isArray(store.keys['ota_notifications_v2'])) {
-        store.keys['ota_notifications_v2'].unshift(note);
-      } else {
-        store.keys['ota_notifications_v2'][note.id] = note;
-      }
+    newNotif = {
+      id: 'notif_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      recipientId: teacher.id,
+      title: 'Staff Verification Approved ✅',
+      message: `Your faculty account has been verified by ${actor}. You now have full access to your school timetable.`,
+      details: 'Anti-imposter verification successfully cleared.',
+      isRead: false,
+      timestamp: Date.now(),
+      type: 'SUCCESS',
+      category: 'SYSTEM'
+    };
+    newAudit = {
+      id: 'audit_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      actorName: actor,
+      actorRole: 'ADMIN',
+      action: 'TEACHER_VERIFIED',
+      details: `Approved faculty account for ${teacher.name} (@${teacher.username}).`,
+      timestamp: Date.now()
+    };
+
+    const txTeachers = await updateOtaStoreListInFirestore('ota_teachers_v3', (list: any[]) =>
+      list.map((t: any) => (t && t.id === teacherId ? { ...t, isApproved: true, approvalStatus: 'APPROVED', rejectionReason: undefined } : t))
+    );
+    if (txTeachers) {
+      store.keys['ota_teachers_v3'] = txTeachers.map((rt: any) => ({
+        ...rt,
+        password: teacherList.find(l => l.id === rt.id)?.password || serverVault[rt.id]?.passwordHash
+      }));
     }
-  } else if (action === 'REJECT') {
-    if (teacher) {
-      teacher.isApproved = false;
-      teacher.approvalStatus = 'REJECTED';
-      teacher.rejectionReason = reason || 'Unverified staff member / Imposter suspected';
+  } else if (action === 'REJECT' && teacher) {
+    const rejReason = reason || 'Unverified staff member / Imposter suspected';
+    teacher.isApproved = false;
+    teacher.approvalStatus = 'REJECTED';
+    teacher.rejectionReason = rejReason;
+
+    newAudit = {
+      id: 'audit_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      actorName: actor,
+      actorRole: 'ADMIN',
+      action: 'TEACHER_REJECTED',
+      details: `Rejected unverified account ${teacher.name} (@${teacher.username}). Reason: ${rejReason}`,
+      timestamp: Date.now()
+    };
+
+    const txTeachers = await updateOtaStoreListInFirestore('ota_teachers_v3', (list: any[]) =>
+      list.map((t: any) => (t && t.id === teacherId ? { ...t, isApproved: false, approvalStatus: 'REJECTED', rejectionReason: rejReason } : t))
+    );
+    if (txTeachers) {
+      store.keys['ota_teachers_v3'] = txTeachers.map((rt: any) => ({
+        ...rt,
+        password: teacherList.find(l => l.id === rt.id)?.password || serverVault[rt.id]?.passwordHash
+      }));
     }
   } else if (action === 'DELETE') {
-    if (Array.isArray(store.keys['ota_teachers_v3'])) {
-      store.keys['ota_teachers_v3'] = store.keys['ota_teachers_v3'].filter((t: any) => t && t.id !== teacherId);
-    } else {
-      delete store.keys['ota_teachers_v3'][teacherId];
+    if (teacher) {
+      newAudit = {
+        id: 'audit_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+        actorName: actor,
+        actorRole: 'ADMIN',
+        action: 'TEACHER_REJECTED',
+        details: `Denied imposter and removed account ${teacher.name} (@${teacher.username}). Reason: ${reason || 'Imposter suspected'}`,
+        timestamp: Date.now()
+      };
     }
-    scrubTeacherFromTimetable(teacherId);
+    delete serverVault[teacherId];
+    const txTeachers = await updateOtaStoreListInFirestore('ota_teachers_v3', (list: any[]) =>
+      list.filter((t: any) => t && t.id !== teacherId)
+    );
+    store.keys['ota_teachers_v3'] = (txTeachers || teacherList.filter((t: any) => t && t.id !== teacherId)).map((rt: any) => ({
+      ...rt,
+      password: teacherList.find(l => l.id === rt.id)?.password || serverVault[rt.id]?.passwordHash
+    }));
+    timetableChanged = scrubTeacherFromTimetable(teacherId);
+  }
+
+  if (newNotif) {
+    const txNotifs = await updateOtaStoreListInFirestore('ota_notifications_v2', (list: any[]) => [newNotif, ...list].slice(0, 300));
+    if (txNotifs) store.keys['ota_notifications_v2'] = txNotifs;
+  }
+  if (newAudit) {
+    const txLogs = await updateOtaStoreListInFirestore('ota_audit_logs_v1', (list: any[]) => [newAudit, ...list].slice(0, 500));
+    if (txLogs) store.keys['ota_audit_logs_v1'] = txLogs;
+  }
+  if (action === 'DELETE') {
+    await syncOtaStoreDocToFirestore('ota_server_vault_v1', encryptVault(serverVault));
+    if (timetableChanged) {
+      await syncOtaStoreDocToFirestore('ota_timetable_v2', store.keys['ota_timetable_v2']);
+    }
+  }
+
+  let autoBindResult = { publishedBoundCount: 0, draftBoundCount: 0, totalBoundCount: 0, changedKeys: {} as Record<string, any> };
+  if (action === 'APPROVE' && teacher) {
+    const approvedList = Array.isArray(store.keys['ota_teachers_v3']) ? store.keys['ota_teachers_v3'] : teacherList;
+    const updatedTeacherObj = approvedList.find((t: any) => t && t.id === teacherId) || teacher;
+    autoBindResult = await autoBindTeacherToActiveTimetables(updatedTeacherObj);
   }
 
   store.version = Date.now();
-  saveStoreToDisk(true);
-
   const sanitized = getSanitizedKeys('ADMIN');
-
-  try {
-    syncTeachersAndVaultToFirestore(store.keys['ota_teachers_v3']);
-    syncOtaStoreDocToFirestore('ota_notifications_v2', store.keys['ota_notifications_v2']);
-    if (action === 'DELETE') {
-      syncOtaStoreDocToFirestore('ota_timetable_v2', store.keys['ota_timetable_v2']);
-    }
-  } catch (err) {}
 
   broadcastToClients('update', {
     version: store.version,
     key: 'ota_teachers_v3',
     item_id: teacherId,
     isDelete: action === 'DELETE',
-    data: action === 'DELETE' ? null : teacher,
+    data: action === 'DELETE' ? null : sanitizeTeacherRecord(teacher, false),
     changedKeys: {
       ota_teachers_v3: sanitized['ota_teachers_v3'],
       ota_notifications_v2: sanitized['ota_notifications_v2'],
-      ...(action === 'DELETE' ? { ota_timetable_v2: sanitized['ota_timetable_v2'] } : {})
+      ota_audit_logs_v1: sanitized['ota_audit_logs_v1'],
+      ...(timetableChanged ? { ota_timetable_v2: sanitized['ota_timetable_v2'] } : {}),
+      ...autoBindResult.changedKeys
     }
   });
 
-  return res.json({ success: true, teacher: action === 'DELETE' ? null : teacher });
+  return res.json({
+    success: true,
+    teacher: action === 'DELETE' ? null : sanitizeTeacherRecord(teacher, false),
+    autoBoundCount: autoBindResult.publishedBoundCount
+  });
 });
 
 // Permanent Delete Teacher Endpoint (Ensures Teacher Stays Deleted Across All Devices)
-app.delete('/api/teachers/:id', requireAdmin, (req, res) => {
+app.delete('/api/teachers/:id', requireAdmin, async (req, res) => {
   const teacherId: string = typeof req.params.id === 'string' ? req.params.id : (Array.isArray(req.params.id) ? (req.params.id[0] || '') : '');
   if (!teacherId) {
     return res.status(400).json({ success: false, error: 'teacherId parameter is required' });
   }
 
-  // 1. Remove from ota_teachers_v3 list
-  const teachersObj = store.keys['ota_teachers_v3'] || [];
-  let teacherList: any[] = Array.isArray(teachersObj) ? teachersObj : Object.values(teachersObj);
-  store.keys['ota_teachers_v3'] = teacherList.filter((t: any) => t && t.id !== teacherId);
+  delete serverVault[teacherId];
+  const prevTeachers = Array.isArray(store.keys['ota_teachers_v3']) ? store.keys['ota_teachers_v3'] : Object.values(store.keys['ota_teachers_v3'] || {});
+  const txTeachers = await updateOtaStoreListInFirestore('ota_teachers_v3', (list: any[]) =>
+    list.filter((t: any) => t && t.id !== teacherId)
+  );
+  store.keys['ota_teachers_v3'] = (txTeachers || prevTeachers.filter((t: any) => t && t.id !== teacherId)).map((rt: any) => ({
+    ...rt,
+    password: prevTeachers.find((l: any) => l && l.id === rt.id)?.password || serverVault[rt.id]?.passwordHash
+  }));
 
-  // 2. Remove teacher from all slots in timetable
   const timetableChanged = scrubTeacherFromTimetable(teacherId);
 
-  // 3. Remove absences and requests associated with this teacher
-  if (Array.isArray(store.keys['ota_absences_v1'])) {
-    store.keys['ota_absences_v1'] = store.keys['ota_absences_v1'].filter((a: any) => a && a.teacherId !== teacherId);
-  }
-  if (Array.isArray(store.keys['ota_requests_v2'])) {
-    store.keys['ota_requests_v2'] = store.keys['ota_requests_v2'].filter((r: any) => r && r.teacherId !== teacherId && r.senderId !== teacherId && r.targetTeacherId !== teacherId);
+  const txAbsences = await updateOtaStoreListInFirestore('ota_absences_v1', (list: any[]) =>
+    list.filter((a: any) => a && a.teacherId !== teacherId)
+  );
+  if (txAbsences) store.keys['ota_absences_v1'] = txAbsences;
+
+  const txRequests = await updateOtaStoreListInFirestore('ota_requests_v2', (list: any[]) =>
+    list.filter((r: any) => r && r.teacherId !== teacherId && r.senderId !== teacherId && r.targetTeacherId !== teacherId)
+  );
+  if (txRequests) store.keys['ota_requests_v2'] = txRequests;
+
+  await syncOtaStoreDocToFirestore('ota_server_vault_v1', encryptVault(serverVault));
+  if (timetableChanged) {
+    await syncOtaStoreDocToFirestore('ota_timetable_v2', store.keys['ota_timetable_v2']);
   }
 
   store.version = Date.now();
-  saveStoreToDisk();
-
   const sanitized = getSanitizedKeys('ADMIN');
-
-  try {
-    syncTeachersAndVaultToFirestore(store.keys['ota_teachers_v3']);
-    if (timetableChanged) {
-      syncOtaStoreDocToFirestore('ota_timetable_v2', store.keys['ota_timetable_v2']);
-    }
-  } catch (err) {}
 
   // Broadcast deletion to all connected clients immediately
   broadcastToClients('update', {
@@ -2418,6 +2757,8 @@ app.delete('/api/teachers/:id', requireAdmin, (req, res) => {
     data: null,
     changedKeys: {
       ota_teachers_v3: sanitized['ota_teachers_v3'],
+      ota_absences_v1: sanitized['ota_absences_v1'],
+      ota_requests_v2: sanitized['ota_requests_v2'],
       ...(timetableChanged ? { ota_timetable_v2: sanitized['ota_timetable_v2'] } : {})
     }
   });
@@ -2459,7 +2800,6 @@ app.post('/api/teachers/clear-all', requireAdmin, async (req, res) => {
   }
 
   store.version = Date.now();
-  saveStoreToDisk(true);
 
   try {
     await syncTeachersAndVaultToFirestore([]);
@@ -2484,36 +2824,40 @@ app.post('/api/teachers/clear-all', requireAdmin, async (req, res) => {
 });
 
 // Dedicated Teacher Profile & Picture Update Endpoint
-app.post('/api/teachers/:id/profile', requireAuth, (req, res) => {
+app.post('/api/teachers/:id/profile', requireAuth, async (req, res) => {
   const teacherId = req.params.id;
   const authUser = (req as any).user;
   if (authUser.role !== 'ADMIN' && authUser.id !== teacherId) {
     return res.status(403).json({ success: false, error: 'Forbidden: You can only update your own teacher profile' });
   }
-  const { profilePicture, bio, contactEmail, contactPhone, isCompleted, assignedClasses, subjectsTaught, availability, name } = req.body;
+  const { profilePicture, bio, contactEmail, contactPhone, isCompleted, assignedClasses, subjectsTaught, classSubjects, availability, name, uiTheme } = req.body;
+  const ALLOWED_THEMES = ['white_blue', 'obsidian_purple', 'midnight_cyan', 'lavender_mist', 'emerald_mint', 'rose_quartz', 'amber_ivory'];
 
   const teachersObj = store.keys['ota_teachers_v3'] || [];
   let teacherList: any[] = Array.isArray(teachersObj) ? teachersObj : Object.values(teachersObj);
   let teacher = teacherList.find((t: any) => t && t.id === teacherId);
 
   if (!teacher) {
+    if (authUser.role !== 'ADMIN') {
+      return res.status(404).json({ success: false, error: 'Teacher account not found' });
+    }
     teacher = {
       id: teacherId,
       name: name || 'Teacher',
       username: teacherId,
       subjectsTaught: subjectsTaught || [],
       assignedClasses: assignedClasses || [],
+      ...(classSubjects && typeof classSubjects === 'object' ? { classSubjects } : {}),
       availability: availability || {},
       approvalStatus: 'APPROVED',
       isApproved: true,
-      isCompleted: isCompleted ?? true
+      isCompleted: isCompleted ?? true,
+      ...(typeof uiTheme === 'string' && ALLOWED_THEMES.includes(uiTheme) ? { uiTheme } : {})
     };
     teacherList.push(teacher);
   }
 
-  if (profilePicture !== undefined) {
-    teacher.profilePicture = profilePicture;
-  }
+  if (profilePicture !== undefined) teacher.profilePicture = profilePicture;
   if (bio !== undefined) teacher.bio = bio;
   if (contactEmail !== undefined) teacher.contactEmail = contactEmail;
   if (contactPhone !== undefined) teacher.contactPhone = contactPhone;
@@ -2521,30 +2865,58 @@ app.post('/api/teachers/:id/profile', requireAuth, (req, res) => {
   if (isCompleted !== undefined) teacher.isCompleted = isCompleted;
   if (assignedClasses !== undefined) teacher.assignedClasses = assignedClasses;
   if (subjectsTaught !== undefined) teacher.subjectsTaught = subjectsTaught;
+  if (classSubjects !== undefined && typeof classSubjects === 'object') teacher.classSubjects = classSubjects;
   if (availability !== undefined) teacher.availability = availability;
+  if (typeof uiTheme === 'string' && ALLOWED_THEMES.includes(uiTheme)) {
+    teacher.uiTheme = uiTheme;
+  }
   teacher.updatedAt = Date.now();
 
-  store.keys['ota_teachers_v3'] = teacherList;
+  const cleanUpdate = sanitizeTeacherRecord(teacher, false);
+  const txTeachers = await updateOtaStoreListInFirestore('ota_teachers_v3', (list: any[]) => {
+    const idx = list.findIndex((t: any) => t && t.id === teacherId);
+    if (idx >= 0) {
+      list[idx] = { ...list[idx], ...cleanUpdate };
+    } else {
+      list.push(cleanUpdate);
+    }
+    return list;
+  });
+
+  if (txTeachers) {
+    store.keys['ota_teachers_v3'] = txTeachers.map((rt: any) => ({
+      ...rt,
+      password: teacherList.find(l => l.id === rt.id)?.password || serverVault[rt.id]?.passwordHash
+    }));
+  } else {
+    store.keys['ota_teachers_v3'] = teacherList;
+  }
+
+  // Auto-bind newly completed/updated teacher portfolio to any existing published/draft timetable
+  const bindRes = await autoBindTeacherToActiveTimetables(teacher);
+
   store.version = Date.now();
-  saveStoreToDisk();
-
-  const sanitized = getSanitizedKeys();
-
-  try {
-    syncTeachersAndVaultToFirestore(store.keys['ota_teachers_v3']);
-  } catch (err) {}
+  const sanitized = getSanitizedKeys('ADMIN');
 
   broadcastToClients('update', {
     version: store.version,
     key: 'ota_teachers_v3',
     item_id: teacherId,
-    data: teacher,
+    data: cleanUpdate,
     changedKeys: {
-      ota_teachers_v3: sanitized['ota_teachers_v3']
+      ota_teachers_v3: sanitized['ota_teachers_v3'],
+      ...bindRes.changedKeys
     }
   });
 
-  return res.json({ success: true, teacher });
+  return res.json({
+    success: true,
+    teacher: cleanUpdate,
+    version: store.version,
+    autoBoundCount: bindRes.publishedBoundCount,
+    ...(bindRes.changedKeys['ota_timetable_v2'] ? { timetable: bindRes.changedKeys['ota_timetable_v2'] } : {}),
+    ...(bindRes.changedKeys['ota_timetable_draft_v1'] ? { draftTimetable: bindRes.changedKeys['ota_timetable_draft_v1'] } : {})
+  });
 });
 
 // --- ADMIN VERIFICATION HELPER ---
@@ -2712,16 +3084,18 @@ app.post('/api/schools', async (req, res) => {
     }
   }
 
-  // 7. Security: Write ONLY this manual school document to Firestore (Zero Pre-population enforced)
+  // 7. Persist strictly to Firebase Firestore (Zero pre-populated mock data)
   try {
     await syncSchoolDocToFirestore(newSchool);
-    console.log(`[Firestore Secure Sync] Manually registered institution "${cleanName}" (${newSchool.id}) saved to Firestore. Zero default data seeded.`);
+    await syncOtaStoreDocToFirestore('ota_schools_v1', store.keys['ota_schools_v1']);
+    if (adminUsername && typeof adminPassword !== 'undefined' && String(adminPassword).length >= 4) {
+      await syncOtaStoreDocToFirestore('ota_admins', store.keys['ota_admins']);
+      await syncOtaStoreDocToFirestore('ota_server_vault_v1', encryptVault(serverVault));
+    }
+    console.log(`[Firestore Secure Sync] Manually registered institution "${cleanName}" (${newSchool.id}) saved to Firestore.`);
   } catch (fsErr) {
-    console.warn('[Firestore Secure Sync] Note: Firestore write logged. Active local persistence maintained.', fsErr);
+    console.warn('[Firestore Secure Sync] School save error:', fsErr);
   }
-  try {
-    syncOtaStoreDocToFirestore('ota_schools_v1', store.keys['ota_schools_v1']);
-  } catch {}
 
   // 8. Security Audit Trail
   const auditLog = {
@@ -2732,20 +3106,27 @@ app.post('/api/schools', async (req, res) => {
     details: `Administrator manually registered new institution: ${cleanName} [Code: ${cleanCode}, Accreditation: ${cleanAccreditation}]. Zero default data pre-population policy enforced.`,
     timestamp: Date.now()
   };
-  if (!store.keys['ota_audit_logs_v1']) store.keys['ota_audit_logs_v1'] = [];
-  if (Array.isArray(store.keys['ota_audit_logs_v1'])) {
-    store.keys['ota_audit_logs_v1'].unshift(auditLog);
+  const txLogs = await updateOtaStoreListInFirestore('ota_audit_logs_v1', (list: any[]) => [auditLog, ...list].slice(0, 500));
+  if (txLogs) {
+    store.keys['ota_audit_logs_v1'] = txLogs;
   } else {
-    store.keys['ota_audit_logs_v1'][auditLog.id] = auditLog;
+    if (!store.keys['ota_audit_logs_v1']) store.keys['ota_audit_logs_v1'] = [];
+    if (Array.isArray(store.keys['ota_audit_logs_v1'])) {
+      store.keys['ota_audit_logs_v1'].unshift(auditLog);
+    } else {
+      store.keys['ota_audit_logs_v1'][auditLog.id] = auditLog;
+    }
   }
 
   store.version = Date.now();
-  saveStoreToDisk();
 
   // 9. Real-Time Multi-Device Broadcast
   broadcastToClients('update', {
     version: store.version,
-    keys: getSanitizedKeys()
+    changedKeys: {
+      ota_schools_v1: store.keys['ota_schools_v1'],
+      ota_audit_logs_v1: store.keys['ota_audit_logs_v1']
+    }
   });
 
   return res.json({ 
@@ -2787,15 +3168,14 @@ app.delete('/api/schools/:id', async (req, res) => {
     console.info('[Firestore] Cloud sync school deletion handled for ID:', id);
   }
   try {
-    syncOtaStoreDocToFirestore('ota_schools_v1', store.keys['ota_schools_v1']);
+    await syncOtaStoreDocToFirestore('ota_schools_v1', store.keys['ota_schools_v1']);
   } catch {}
 
   store.version = Date.now();
-  saveStoreToDisk();
 
   broadcastToClients('update', {
     version: store.version,
-    keys: getSanitizedKeys()
+    keys: getSanitizedKeys('ADMIN')
   });
 
   return res.json({ success: true, message: `Institution ${target.name} removed.` });
@@ -2902,243 +3282,87 @@ app.post('/api/auth/change-password', (req, res) => {
 });
 
 
-// --- EMAIL NOTIFICATION ENDPOINT (Nodemailer) ---
-app.post('/api/notifications/send-email', async (req, res) => {
-  const { recipientEmail, title, message } = req.body;
-  if (!recipientEmail) {
-    return res.status(400).json({ success: false, error: 'Recipient email is required' });
+// --- API ROUTES ---
+
+// --- SERVER-SIDE GEMINI AI ENDPOINTS ---
+function handleGeminiRouteError(res: express.Response, err: any, fallbackMsg: string) {
+  if (err instanceof GeminiConfigurationError) {
+    return res.status(err.statusCode).json({ success: false, error: err.message });
   }
+  return res.status(502).json({ success: false, error: err?.message || fallbackMsg });
+}
 
-  const smtpHost = process.env.SMTP_HOST;
-  const smtpUser = process.env.SMTP_USER;
-  const smtpPass = process.env.SMTP_PASS;
-  const smtpPort = Number(process.env.SMTP_PORT || 587);
-  const smtpFrom = process.env.SMTP_FROM || '"OTA Smart Timetable" <noreply@otasmart.edu.ng>';
-
-  if (!smtpHost || !smtpUser) {
-    console.warn('[Mailer] SMTP_HOST or SMTP_USER environment variable not configured. Skipping email dispatch.');
-    return res.json({ success: false, skipped: true, message: 'SMTP credentials not set in environment.' });
-  }
-
+app.post('/api/ai/audit-schedule', async (req, res) => {
   try {
-    const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpPort === 465,
-      auth: {
-        user: smtpUser,
-        pass: smtpPass || ''
-      }
-    });
-
-    await transporter.sendMail({
-      from: smtpFrom,
-      to: recipientEmail,
-      subject: title,
-      text: `${message}\n\n---\nOta Total Academy Timetable Management System`
-    });
-
-    return res.json({ success: true, message: 'Email dispatched successfully' });
+    const { grid = {}, teachers = [], classes = [], subjects = [], conflicts = [] } = req.body || {};
+    const result = await runServerTimetableAudit({ grid, teachers, classes, subjects, conflicts });
+    return res.json({ success: true, ...result });
   } catch (err: any) {
-    console.error('[Mailer] Failed to send email:', err);
-    return res.status(500).json({ success: false, error: err.message || 'Failed to send email' });
+    return handleGeminiRouteError(res, err, 'Failed to run AI schedule audit');
   }
 });
 
-// --- API ROUTES ---
+app.post('/api/ai/optimize-comfort', async (req, res) => {
+  try {
+    const { grid = {}, teachers = [], classes = [], subjects = [] } = req.body || {};
+    const result = await runServerComfortOptimization({ grid, teachers, classes, subjects });
+    return res.json({ success: true, ...result });
+  } catch (err: any) {
+    return handleGeminiRouteError(res, err, 'Failed to run AI comfort optimization');
+  }
+});
+
+app.post('/api/ai/analyze-errors', async (req, res) => {
+  try {
+    const { logs = [] } = req.body || {};
+    const analysis = await runServerErrorAnalysis({ logs });
+    return res.json({ success: true, analysis });
+  } catch (err: any) {
+    return handleGeminiRouteError(res, err, 'Failed to analyze generation errors');
+  }
+});
+
+app.post('/api/ai/learn-reference', async (req, res) => {
+  try {
+    const { input } = req.body || {};
+    const result = await runServerLearnReference({ input });
+    return res.json({ success: true, ...result });
+  } catch (err: any) {
+    return handleGeminiRouteError(res, err, 'Failed to analyze timetable reference');
+  }
+});
+
+app.post('/api/ai/moderate-chat', async (req, res) => {
+  try {
+    const { content = '' } = req.body || {};
+    const result = await runServerChatModeration({ content });
+    return res.json({ success: true, ...result });
+  } catch (err: any) {
+    return handleGeminiRouteError(res, err, 'Failed to moderate chat content');
+  }
+});
+
+app.post('/api/ai/suggest-conflict-fix', async (req, res) => {
+  try {
+    const { conflict, teachers = [], rooms = [] } = req.body || {};
+    if (!conflict) {
+      return res.status(400).json({ success: false, error: 'Conflict payload is required.' });
+    }
+    const suggestion = await runServerConflictFix({ conflict, teachers, rooms });
+    return res.json({ success: true, suggestion });
+  } catch (err: any) {
+    return handleGeminiRouteError(res, err, 'Failed to suggest conflict resolution');
+  }
+});
 
 // --- AI TIMETABLE LIGHTNING-FAST ANALYSIS ENDPOINT ---
 app.post('/api/ai/analyze-timetable', async (req, res) => {
-  const { level = 'JUNIOR', subjects = [], classes = [], teachers = [], totalSlots = 40 } = req.body;
-
-  const assignedSlots = subjects.reduce((sum: number, s: any) => sum + (s.defaultPeriodCount || s.periodsPerWeek || 3), 0);
-  const remainingSlots = totalSlots - assignedSlots;
-  const isOverallocated = remainingSlots < 0;
-  const isBalanced = remainingSlots >= 0 && remainingSlots <= 2;
-
-  // Instant deterministic rule engine for lightning fallback
-  const deterministicSuggestions: any[] = [];
-  const issues: string[] = [];
-
-  if (isOverallocated) {
-    const deficit = Math.abs(remainingSlots);
-    issues.push(`Overallocated by ${deficit} slots: ${level} curriculum has ${assignedSlots} weekly periods but only ${totalSlots} timetable slots exist.`);
-    
-    // Sort subjects by period count descending, non-core first
-    const adjustable = [...subjects]
-      .filter((s: any) => (s.defaultPeriodCount || s.periodsPerWeek || 3) > 1)
-      .sort((a: any, b: any) => {
-        if (a.isCore !== b.isCore) return a.isCore ? 1 : -1;
-        return (b.defaultPeriodCount || 3) - (a.defaultPeriodCount || 3);
-      });
-
-    const adjustments: { subjectId: string; newPeriodCount: number; reason: string }[] = [];
-    let toCut = deficit;
-    for (const sub of adjustable) {
-      if (toCut <= 0) break;
-      const current = sub.defaultPeriodCount || sub.periodsPerWeek || 3;
-      const cut = Math.min(toCut, Math.max(1, current - 2));
-      const newCount = current - cut;
-      adjustments.push({
-        subjectId: sub.id,
-        newPeriodCount: newCount,
-        reason: `Reduce ${sub.name} from ${current} to ${newCount} periods/week to eliminate slot deficit.`
-      });
-      toCut -= cut;
-    }
-
-    deterministicSuggestions.push({
-      id: 'fix_slot_overload_' + Date.now(),
-      type: 'SLOT_OVERLOAD',
-      level,
-      title: `⚡ Resolve ${deficit}-Slot Over-Allocation`,
-      description: `Rebalance weekly periods across ${adjustments.length} subjects so total periods fit exactly within ${totalSlots} available timetable spaces.`,
-      severity: 'CRITICAL',
-      recommendedAction: `Apply automatic period trim to fit ${totalSlots} slots.`,
-      autoFixPayload: { subjectAdjustments: adjustments }
-    });
-  } else if (remainingSlots > 4) {
-    issues.push(`Unallocated spaces: ${remainingSlots} empty slots remain unassigned in ${level} schedule.`);
-    deterministicSuggestions.push({
-      id: 'fix_slot_deficit_' + Date.now(),
-      type: 'SLOT_DEFICIT',
-      level,
-      title: `Optimize ${remainingSlots} Open Timetable Slots`,
-      description: `You have ${remainingSlots} unassigned spaces remaining. You can assign extra periods to Core subjects (e.g. Mathematics or English) or add Electives.`,
-      severity: 'SUGGESTION',
-      recommendedAction: 'Add elective subjects or expand core subject frequencies.'
-    });
-  }
-
-  // Teacher bottleneck check
-  const teacherPeriodsMap: Record<string, { name: string; count: number; subjects: string[] }> = {};
-  classes.forEach((c: any) => {
-    subjects.forEach((s: any) => {
-      const tid = s.preferredTeacherId || (s.assignedTeacherIds && s.assignedTeacherIds[0]);
-      if (tid && tid !== 'SYSTEM') {
-        const teacher = teachers.find((t: any) => t.id === tid);
-        const tName = teacher?.name || tid;
-        if (!teacherPeriodsMap[tid]) {
-          teacherPeriodsMap[tid] = { name: tName, count: 0, subjects: [] };
-        }
-        teacherPeriodsMap[tid].count += (s.defaultPeriodCount || 3);
-        if (!teacherPeriodsMap[tid].subjects.includes(s.name)) {
-          teacherPeriodsMap[tid].subjects.push(s.name);
-        }
-      }
-    });
-  });
-
-  for (const [tid, info] of Object.entries(teacherPeriodsMap)) {
-    if (info.count > 30) {
-      issues.push(`Faculty workload warning: ${info.name} has ${info.count} assigned periods/week across ${classes.length} classes (Recommended cap: 28).`);
-      deterministicSuggestions.push({
-        id: `fix_teacher_${tid}_` + Date.now(),
-        type: 'TEACHER_BOTTLENECK',
-        level,
-        title: `Relieve Teacher Load: ${info.name}`,
-        description: `${info.name} is assigned ${info.count} periods/week for ${info.subjects.join(', ')}. Recommend distributing to an assistant teacher.`,
-        severity: 'WARNING',
-        recommendedAction: `Reassign some class streams for ${info.subjects[0]} to another faculty member.`
-      });
-    }
-  }
-
-  // If Gemini API Key exists, enhance with Gemini 2.5 Flash reasoning at lightning speed
-  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
-  if (apiKey) {
-    try {
-      const ai = new GoogleGenAI({ 
-        apiKey,
-        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
-      });
-
-      const prompt = `
-You are the AI Chief Academic Timetable Optimization Engine.
-Analyze this curriculum and scheduling configuration for the "${level}" academic tier:
-- Timetable Total Slots per class: ${totalSlots}
-- Total Allocated Periods from Subjects: ${assignedSlots}
-- Remaining Free/Unassigned Slots: ${remainingSlots}
-- Status: ${isOverallocated ? 'OVERALLOCATED (Problem)' : isBalanced ? 'PERFECTLY BALANCED' : 'UNDERALLOCATED'}
-- Subjects Configured (${subjects.length}):
-${subjects.map((s: any) => `  * ${s.name} (${s.code || 'CODE'}): ${s.defaultPeriodCount || 3} periods/wk, max ${s.maxPerDay || 1}/day, Core: ${s.isCore}`).join('\n')}
-- Number of ${level} Classes: ${classes.length}
-- Faculty Available: ${teachers.length}
-
-Provide a concise, ultra-fast diagnostic and recommendations.
-Return JSON with this EXACT structure:
-{
-  "summary": "1-2 sentence executive analysis",
-  "issues": ["list of concrete issues found"],
-  "aiSuggestions": [
-    {
-      "id": "unique_string",
-      "type": "SLOT_OVERLOAD" | "TEACHER_BOTTLENECK" | "SLOT_DEFICIT" | "SUBJECT_CLASH" | "OPTIMIZATION",
-      "title": "short title",
-      "description": "actionable explanation",
-      "severity": "CRITICAL" | "WARNING" | "SUGGESTION",
-      "recommendedAction": "1-line direct action",
-      "autoFixPayload": {
-        "subjectAdjustments": [
-          { "subjectId": "string", "newPeriodCount": number, "reason": "string" }
-        ]
-      }
-    }
-  ]
-}
-`;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          temperature: 0.2
-        }
-      });
-
-      if (response.text) {
-        const parsed = JSON.parse(response.text);
-        return res.json({
-          success: true,
-          level,
-          slotBudget: {
-            totalSlots,
-            assignedSlots,
-            remainingSlots,
-            isOverallocated,
-            isBalanced,
-            subjectsCount: subjects.length
-          },
-          summary: parsed.summary || (isOverallocated ? `Overallocated by ${Math.abs(remainingSlots)} slots.` : 'Curriculum is structurally viable.'),
-          issues: (parsed.issues && parsed.issues.length > 0) ? parsed.issues : issues,
-          suggestions: (parsed.aiSuggestions && parsed.aiSuggestions.length > 0) ? parsed.aiSuggestions : deterministicSuggestions
-        });
-      }
-    } catch (aiErr: any) {
-      console.warn('[AI Analyzer] Gemini call fallback to rule engine:', aiErr?.message || aiErr);
-    }
-  }
-
-  // Fast response using local deterministic rule engine
+  const { level = 'JUNIOR', subjects = [], classes = [], teachers = [], totalSlots = 40 } = req.body || {};
+  const result = await runServerLightningAnalysis({ level, subjects, classes, teachers, totalSlots });
   return res.json({
     success: true,
     level,
-    slotBudget: {
-      totalSlots,
-      assignedSlots,
-      remainingSlots,
-      isOverallocated,
-      isBalanced,
-      subjectsCount: subjects.length
-    },
-    summary: isOverallocated 
-      ? `Critical Over-Allocation: ${assignedSlots} periods requested, but only ${totalSlots} slots available per week (${Math.abs(remainingSlots)} slots excess).`
-      : isBalanced 
-        ? `Optimal balance: ${assignedSlots}/${totalSlots} periods allocated with ${remainingSlots} free study periods.`
-        : `Under-allocated: ${assignedSlots} of ${totalSlots} slots assigned (${remainingSlots} slots unallocated).`,
-    issues: issues.length > 0 ? issues : ['No critical structural issues detected.'],
-    suggestions: deterministicSuggestions
+    ...result,
   });
 });
 
@@ -3330,15 +3554,24 @@ app.get('/api/sync/state', (req, res) => {
 
 // Narrowly scoped public published-schedule endpoint
 app.get('/api/public/timetable', (req, res) => {
-  const meta = store.keys['ota_timetable_metadata_v1'] || {
-    revisionId: store.keys['ota_timetable_v2']?._revisionId || 1,
-    publishedAt: Date.now(),
-    publishedBy: 'System',
-    status: 'PUBLISHED'
-  };
+  const pubGrid = store.keys['ota_timetable_v2'] || null;
+  const hasGrid = !!(pubGrid && typeof pubGrid === 'object' && Object.keys(pubGrid).some(k => k !== '_revisionId'));
+  const meta = store.keys['ota_timetable_metadata_v1'] || (hasGrid
+    ? {
+        revisionId: pubGrid?._revisionId || 1,
+        publishedAt: Date.now(),
+        publishedBy: 'System',
+        status: 'PUBLISHED'
+      }
+    : {
+        revisionId: 0,
+        publishedAt: 0,
+        publishedBy: '',
+        status: 'DRAFT'
+      });
   return res.json({
     success: true,
-    timetable: store.keys['ota_timetable_v2'] || null,
+    timetable: hasGrid ? pubGrid : null,
     metadata: meta,
     schools: store.keys['ota_schools_v1'] || [],
     classes: store.keys['ota_classes'] || [],
@@ -3363,7 +3596,7 @@ app.post('/api/timetable/publish', requireAdmin, async (req, res) => {
   }
 
   const prevMetaRaw = store.keys['ota_timetable_metadata_v1'];
-  let currentRev = 1;
+  let currentRev = 0;
   if (prevMetaRaw && typeof prevMetaRaw.revisionId === 'number' && prevMetaRaw.revisionId > 0) {
     currentRev = prevMetaRaw.revisionId;
   } else if (store.keys['ota_timetable_v2'] && typeof store.keys['ota_timetable_v2']._revisionId === 'number' && store.keys['ota_timetable_v2']._revisionId > 0) {
@@ -3452,12 +3685,21 @@ app.post('/api/timetable/publish', requireAdmin, async (req, res) => {
 
   store.version = Date.now();
 
+  // Persist atomically to Firebase Firestore (zero local disk storage)
   try {
-    // Atomic synchronous disk write (<2ms)
-    fs.writeFileSync(DATA_FILE, JSON.stringify(store), 'utf-8');
-  } catch (err: any) {
-    console.error('Failed to persist timetable to disk:', err);
-    return res.status(500).json({ success: false, error: 'Database persistence failure: could not save published timetable' });
+    const firestoreWrites = [
+      syncOtaStoreDocToFirestore('ota_timetable_v2', authoritativeTimetable),
+      syncOtaStoreDocToFirestore('ota_timetable_metadata_v1', newMeta),
+      syncOtaStoreDocToFirestore('ota_notifications_v2', notifs),
+      deleteOtaStoreDocFromFirestore('ota_timetable_draft_v1')
+    ];
+    if (store.keys['ota_history_v2'] !== undefined) {
+      firestoreWrites.push(syncOtaStoreDocToFirestore('ota_history_v2', store.keys['ota_history_v2']));
+    }
+    await Promise.all(firestoreWrites);
+  } catch (cloudErr: any) {
+    console.error('[Firestore Cloud Sync] Timetable publish persistence error:', cloudErr);
+    return res.status(500).json({ success: false, error: 'Database persistence failure: could not save published timetable to Firestore' });
   }
 
   // Broadcast canonical update to all connected SSE clients immediately
@@ -3466,18 +3708,10 @@ app.post('/api/timetable/publish', requireAdmin, async (req, res) => {
     changedKeys: {
       ota_timetable_v2: authoritativeTimetable,
       ota_timetable_metadata_v1: newMeta,
-      ota_notifications_v2: notifs
+      ota_notifications_v2: notifs,
+      ota_timetable_draft_v1: null,
+      ...(store.keys['ota_history_v2'] !== undefined ? { ota_history_v2: store.keys['ota_history_v2'] } : {})
     }
-  });
-
-  // Multi-device Cloud Sync to Firestore in background (non-blocking, keeps user publish latency <15ms)
-  Promise.all([
-    syncOtaStoreDocToFirestore('ota_timetable_v2', authoritativeTimetable),
-    syncOtaStoreDocToFirestore('ota_timetable_metadata_v1', newMeta),
-    syncOtaStoreDocToFirestore('ota_notifications_v2', notifs),
-    deleteOtaStoreDocFromFirestore('ota_timetable_draft_v1')
-  ]).catch((cloudErr) => {
-    console.warn('[Firestore Cloud Sync] Background sync notice:', cloudErr);
   });
 
   return res.json({
@@ -3489,8 +3723,21 @@ app.post('/api/timetable/publish', requireAdmin, async (req, res) => {
   });
 });
 
+// GET full store for Developer Backup (Admin or Developer Passphrase only)
+app.get('/api/sync/store', (req, res) => {
+  const pass = req.query.password || req.headers['x-developer-password'];
+  if (pass === 'proxonline26') {
+    return res.json({ version: store.version, keys: getSanitizedKeys('ADMIN') });
+  }
+  const auth = authenticateUser(req);
+  if (!auth.authenticated || auth.user?.role !== 'ADMIN') {
+    return res.status(403).json({ success: false, error: 'Forbidden: Admin or developer authorization required' });
+  }
+  return res.json({ version: store.version, keys: getSanitizedKeys('ADMIN') });
+});
+
 // Authenticated Lesson Note Update
-app.post('/api/timetable/lesson-note', requireAuth, (req, res) => {
+app.post('/api/timetable/lesson-note', requireAuth, async (req, res) => {
   const { classId, day, period, note, link } = req.body;
   const user = (req as any).user;
   const timetable = store.keys['ota_timetable_v2'];
@@ -3499,7 +3746,8 @@ app.post('/api/timetable/lesson-note', requireAuth, (req, res) => {
     if (user.role === 'ADMIN' || slot.teacherId === user.id || (slot.teacherIds && slot.teacherIds.includes(user.id))) {
       slot.lessonNote = note;
       slot.lessonLink = link;
-      saveStoreToDisk();
+      store.version = Date.now();
+      await syncOtaStoreDocToFirestore('ota_timetable_v2', timetable);
       broadcastToClients('update', {
         version: store.version,
         changedKeys: { ota_timetable_v2: timetable }
@@ -3512,28 +3760,36 @@ app.post('/api/timetable/lesson-note', requireAuth, (req, res) => {
 });
 
 // POST single update (Strictly Authenticated and Authorized)
-app.post('/api/sync/update', requireAuth, (req, res) => {
+app.post('/api/sync/update', requireAuth, async (req, res) => {
   const user = (req as any).user;
   const { key, item_id, data, isDelete, updates } = req.body;
 
+  const TEACHER_ALLOWED_LIST_KEYS = [
+    'ota_requests_v2',
+    'ota_absences_v1',
+    'ota_chat_messages',
+    'ota_notifications_v2',
+    'ota_audit_logs_v1'
+  ];
+
   // Strict permission checks based on role
   if (user.role !== 'ADMIN') {
-    // Teachers can only modify their own profile, their requests, or absences
     if (key === 'ota_teachers_v3') {
       if (item_id !== user.id) {
         return res.status(403).json({ success: false, error: 'Forbidden: You can only update your own teacher profile' });
       }
-      if (data) {
+      if (data && typeof data === 'object') {
         delete data.isApproved;
         delete data.approvalStatus;
         delete data.password;
         delete data.recoveryCode;
       }
-    } else if (key === 'ota_requests_v2' || key === 'ota_absences_v1' || key === 'ota_chat_messages') {
+    } else if (key && TEACHER_ALLOWED_LIST_KEYS.includes(key)) {
       // Allowed teacher mutation keys
     } else if (updates && typeof updates === 'object') {
       for (const p of Object.keys(updates)) {
-        if (!p.startsWith(`ota_teachers_v3.${user.id}`) && !p.startsWith('ota_requests_v2') && !p.startsWith('ota_absences_v1')) {
+        const root = p.split('.')[0];
+        if (!p.startsWith(`ota_teachers_v3.${user.id}`) && !TEACHER_ALLOWED_LIST_KEYS.includes(root)) {
           return res.status(403).json({ success: false, error: 'Forbidden: Unauthorized update key for teacher role' });
         }
       }
@@ -3553,42 +3809,76 @@ app.post('/api/sync/update', requireAuth, (req, res) => {
   const now = Date.now();
   store.version = now;
   let timetableAffected = false;
+  const touchedRoots = new Set<string>();
 
   if (updates && typeof updates === 'object') {
     for (const [pathKey, val] of Object.entries(updates)) {
       if (pathKey.includes('.')) {
         const [k, id] = pathKey.split('.');
         applyItemUpdate(k, id, val, val === null || val === undefined);
+        touchedRoots.add(k);
         if (k === 'ota_teachers_v3' && (val === null || val === undefined)) {
           if (scrubTeacherFromTimetable(id)) timetableAffected = true;
         }
+        if (LIST_KEYS.includes(k)) {
+          const itemPayload = (k === 'ota_teachers_v3' && val) ? sanitizeTeacherRecord(val, false) : val;
+          await updateOtaStoreListInFirestore(k, (list: any[]) => {
+            if (itemPayload === null || itemPayload === undefined) {
+              return list.filter((i: any) => i && i.id !== id);
+            }
+            const idx = list.findIndex((i: any) => i && i.id === id);
+            if (idx >= 0) list[idx] = itemPayload;
+            else list.push(itemPayload);
+            return list;
+          });
+        }
       } else {
+        touchedRoots.add(pathKey);
         if (val === null || val === undefined) {
           delete store.keys[pathKey];
+          await deleteOtaStoreDocFromFirestore(pathKey);
         } else {
           if (LIST_KEYS.includes(pathKey)) {
-            if (Array.isArray(val)) {
-              store.keys[pathKey] = val.filter((i: any) => i !== null && i !== undefined);
-            } else if (val && typeof val === 'object') {
-              store.keys[pathKey] = Object.values(val).filter((i: any) => i !== null && i !== undefined);
-            } else {
-              store.keys[pathKey] = [];
-            }
+            const cleanArr = Array.isArray(val)
+              ? val.filter((i: any) => i !== null && i !== undefined)
+              : (val && typeof val === 'object' ? Object.values(val).filter((i: any) => i !== null && i !== undefined) : []);
+            store.keys[pathKey] = cleanArr;
           } else {
             store.keys[pathKey] = val;
           }
+          const toSave = pathKey === 'ota_teachers_v3'
+            ? (store.keys[pathKey] as any[]).map((t: any) => sanitizeTeacherRecord(t, false))
+            : store.keys[pathKey];
+          await syncOtaStoreDocToFirestore(pathKey, toSave);
         }
       }
     }
   } else if (key) {
+    touchedRoots.add(key);
     if (item_id && item_id !== 'fixed') {
       applyItemUpdate(key, item_id, data, !!isDelete);
       if (key === 'ota_teachers_v3' && isDelete) {
         if (scrubTeacherFromTimetable(item_id)) timetableAffected = true;
       }
+      if (LIST_KEYS.includes(key)) {
+        const itemPayload = (key === 'ota_teachers_v3' && data) ? sanitizeTeacherRecord(data, false) : data;
+        const txUpdated = await updateOtaStoreListInFirestore(key, (list: any[]) => {
+          if (isDelete) return list.filter((i: any) => i && i.id !== item_id);
+          const idx = list.findIndex((i: any) => i && i.id === item_id);
+          if (idx >= 0) list[idx] = { ...list[idx], ...itemPayload };
+          else list.push(itemPayload);
+          return list;
+        });
+        if (txUpdated && key !== 'ota_teachers_v3' && key !== 'ota_admins') {
+          store.keys[key] = txUpdated;
+        }
+      } else {
+        await syncOtaStoreDocToFirestore(key, store.keys[key]);
+      }
     } else {
       if (isDelete) {
         delete store.keys[key];
+        await deleteOtaStoreDocFromFirestore(key);
       } else {
         if (LIST_KEYS.includes(key)) {
           if (Array.isArray(data)) {
@@ -3601,29 +3891,56 @@ app.post('/api/sync/update', requireAuth, (req, res) => {
         } else {
           store.keys[key] = data;
         }
+        const toSave = key === 'ota_teachers_v3'
+          ? (store.keys[key] as any[]).map((t: any) => sanitizeTeacherRecord(t, false))
+          : store.keys[key];
+        await syncOtaStoreDocToFirestore(key, toSave);
       }
     }
   }
 
-  saveStoreToDisk();
-
   const changedKeys: Record<string, any> = {};
-  if (key && store.keys[key] !== undefined) {
-    changedKeys[key] = store.keys[key];
-    syncOtaStoreDocToFirestore(key, store.keys[key]);
-  }
+  touchedRoots.forEach(root => {
+    if (store.keys[root] === undefined) {
+      changedKeys[root] = null;
+    } else if (root === 'ota_teachers_v3') {
+      const list = Array.isArray(store.keys[root]) ? store.keys[root] : Object.values(store.keys[root] || {});
+      changedKeys[root] = list.map((t: any) => sanitizeTeacherRecord(t, false));
+    } else if (root === 'ota_admins') {
+      const list = Array.isArray(store.keys[root]) ? store.keys[root] : Object.values(store.keys[root] || {});
+      changedKeys[root] = list.map(sanitizeAdminRecord);
+    } else {
+      changedKeys[root] = store.keys[root];
+    }
+  });
+
   if (timetableAffected && store.keys['ota_timetable_v2'] !== undefined) {
     changedKeys['ota_timetable_v2'] = store.keys['ota_timetable_v2'];
-    syncOtaStoreDocToFirestore('ota_timetable_v2', store.keys['ota_timetable_v2']);
+    await syncOtaStoreDocToFirestore('ota_timetable_v2', store.keys['ota_timetable_v2']);
   }
-  if (updates && typeof updates === 'object') {
-    Object.keys(updates).forEach(p => {
-      const root = p.split('.')[0];
-      if (store.keys[root] !== undefined) {
-        changedKeys[root] = store.keys[root];
-        syncOtaStoreDocToFirestore(root, store.keys[root]);
+
+  // If teacher record(s) updated/completed via /api/sync/update, auto-bind unassigned timetable slots
+  if (touchedRoots.has('ota_teachers_v3')) {
+    const updatedTeacherIds = new Set<string>();
+    if (key === 'ota_teachers_v3' && item_id && !isDelete) {
+      updatedTeacherIds.add(item_id);
+    } else if (updates && typeof updates === 'object') {
+      for (const pathKey of Object.keys(updates)) {
+        if (pathKey.startsWith('ota_teachers_v3.') && updates[pathKey]) {
+          updatedTeacherIds.add(pathKey.split('.')[1]);
+        }
       }
-    });
+    }
+    const allTeachers = Array.isArray(store.keys['ota_teachers_v3'])
+      ? store.keys['ota_teachers_v3']
+      : Object.values(store.keys['ota_teachers_v3'] || {});
+    for (const tid of updatedTeacherIds) {
+      const tObj = allTeachers.find((t: any) => t && t.id === tid);
+      if (tObj) {
+        const bindRes = await autoBindTeacherToActiveTimetables(tObj);
+        Object.assign(changedKeys, bindRes.changedKeys);
+      }
+    }
   }
 
   broadcastToClients('update', {
@@ -3726,15 +4043,27 @@ app.get('/api/developer/teachers', (req, res) => {
   }
   const teachersObj = store.keys['ota_teachers_v3'] || [];
   const teacherList: any[] = Array.isArray(teachersObj) ? teachersObj : Object.values(teachersObj);
-  const devTeachers = teacherList.map((t: any) => {
-    if (!t) return t;
-    const { password, ...safe } = t;
-    return safe;
-  });
-  return res.json({ success: true, teachers: devTeachers });
+  const devTeachers = teacherList
+    .filter((t: any) => t && !isSyntheticTestTeacher(t))
+    .map((t: any) => {
+      const { password, ...safe } = t;
+      return safe;
+    });
+  const now = Date.now();
+  const pendingVerifications = Array.from(pendingEmailVerifications.values())
+    .filter((p: any) => p && p.expiresAt > now)
+    .map((p: any) => ({
+      email: p.email,
+      name: p.name,
+      username: p.username,
+      code: p.code,
+      expiresAt: p.expiresAt,
+      createdAt: p.createdAt
+    }));
+  return res.json({ success: true, teachers: devTeachers, pendingVerifications });
 });
 
-app.post('/api/developer/regenerate-recovery-code', (req, res) => {
+app.post('/api/developer/regenerate-recovery-code', async (req, res) => {
   const { password, teacherId } = req.body;
   if (password !== 'proxonline26') {
     return res.status(401).json({ success: false, error: 'Unauthorized developer access' });
@@ -3747,7 +4076,7 @@ app.post('/api/developer/regenerate-recovery-code', (req, res) => {
   }
   const newCode = crypto.randomBytes(4).toString('hex').toUpperCase();
   teacher.recoveryCode = newCode;
-  saveStoreToDisk();
+  await syncTeachersAndVaultToFirestore(teacherList);
   return res.json({ success: true, teacherId, recoveryCode: newCode });
 });
 
@@ -3762,11 +4091,13 @@ app.post('/api/sync/reset', (req, res, next) => {
   }
   return requireAuth(req, res, next);
 }, async (req, res) => {
+  Object.keys(serverVault).forEach(k => delete serverVault[k]);
   store = {
     version: Date.now(),
     keys: {}
   };
   seedDefaultStoreData();
+  populateServerVaultFromMemory();
 
   // Explicitly set clean Revision #1 metadata
   const baselineMeta = {
@@ -3783,24 +4114,18 @@ app.post('/api/sync/reset', (req, res, next) => {
   delete store.keys['ota_history_v2'];
   store.keys['ota_notifications_v2'] = [];
 
-  // Atomic write to disk
-  try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(store), 'utf-8');
-  } catch (e) {
-    console.error('Error saving reset store to disk:', e);
-  }
-
   // Multi-device Cloud Sync fresh baseline to Firestore
   try {
-    deleteOtaStoreDocFromFirestore('ota_timetable_draft_v1');
-    deleteOtaStoreDocFromFirestore('ota_history_v2');
-    const sanitized = getSanitizedKeys();
+    await deleteOtaStoreDocFromFirestore('ota_timetable_draft_v1');
+    await deleteOtaStoreDocFromFirestore('ota_history_v2');
+    const sanitized = getSanitizedKeys('ADMIN');
     for (const [k, val] of Object.entries(sanitized)) {
-      syncOtaStoreDocToFirestore(k, val);
+      await syncOtaStoreDocToFirestore(k, val);
     }
+    await syncOtaStoreDocToFirestore('ota_server_vault_v1', encryptVault(serverVault));
   } catch (err) {}
 
-  broadcastToClients('reset', { version: store.version, keys: getSanitizedKeys() });
+  broadcastToClients('reset', { version: store.version, keys: getSanitizedKeys('ADMIN') });
   res.json({ success: true, version: store.version, message: 'System cleanly reset to factory defaults.' });
 });
 
@@ -3813,17 +4138,19 @@ app.post('/api/developer/verify', (req, res) => {
   return res.status(401).json({ success: false, error: 'Unauthorized developer passphrase' });
 });
 
-app.post('/api/developer/reset-all', (req, res) => {
+app.post('/api/developer/reset-all', async (req, res) => {
   const { password } = req.body;
   if (password !== DEVELOPER_PASSPHRASE) {
     return res.status(401).json({ success: false, error: 'Unauthorized developer passphrase' });
   }
 
+  Object.keys(serverVault).forEach(k => delete serverVault[k]);
   store = {
     version: Date.now(),
     keys: {}
   };
   seedDefaultStoreData();
+  populateServerVaultFromMemory();
 
   const baselineMeta = {
     revisionId: 1,
@@ -3839,59 +4166,169 @@ app.post('/api/developer/reset-all', (req, res) => {
   delete store.keys['ota_history_v2'];
   store.keys['ota_notifications_v2'] = [];
 
-  try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(store), 'utf-8');
-  } catch (e) {
-    console.error('Error saving reset store to disk:', e);
-  }
-
   // Purge obsolete and sync fresh baseline to Firestore
   try {
-    deleteOtaStoreDocFromFirestore('ota_timetable_draft_v1');
-    deleteOtaStoreDocFromFirestore('ota_history_v2');
-    const sanitized = getSanitizedKeys();
+    await deleteOtaStoreDocFromFirestore('ota_timetable_draft_v1');
+    await deleteOtaStoreDocFromFirestore('ota_history_v2');
+    const sanitized = getSanitizedKeys('ADMIN');
     for (const [k, val] of Object.entries(sanitized)) {
-      syncOtaStoreDocToFirestore(k, val);
+      await syncOtaStoreDocToFirestore(k, val);
     }
+    await syncOtaStoreDocToFirestore('ota_server_vault_v1', encryptVault(serverVault));
   } catch (err) {}
 
-  broadcastToClients('reset', { version: store.version, keys: getSanitizedKeys() });
+  broadcastToClients('reset', { version: store.version, keys: getSanitizedKeys('ADMIN') });
   res.json({ success: true, version: store.version, message: 'All application data has been wiped and reset to factory defaults.' });
 });
 
-app.post('/api/developer/selective-purge', (req, res) => {
+// 1-Click School Handover Setup: Draft 0, No Published Timetable Yet, 0 Inbox Mails/Communications
+app.post('/api/developer/prepare-school-ready', async (req, res) => {
+  const { password, clearTeachers } = req.body || {};
+  if (password !== DEVELOPER_PASSPHRASE) {
+    return res.status(401).json({ success: false, error: 'Unauthorized developer passphrase' });
+  }
+
+  // Ensure core school configuration (classes, subjects, rooms, settings, schools, admins) is intact
+  seedDefaultStoreData();
+
+  // 1. Remove published & draft timetables cleanly (No published timetable yet)
+  delete store.keys['ota_timetable_v2'];
+  delete store.keys['ota_timetable_draft_v1'];
+  delete store.keys['app_state'];
+
+  // 2. Set authoritative revision to Draft 0
+  const draftZeroMeta = {
+    revisionId: 0,
+    publishedAt: 0,
+    publishedBy: '',
+    status: 'DRAFT'
+  };
+  store.keys['ota_timetable_metadata_v1'] = draftZeroMeta;
+
+  // 3. Clear all inbox mails, notifications, swap requests, absences, chat, audit logs, history, exams, & pending OTPs
+  store.keys['ota_history_v2'] = [];
+  store.keys['ota_notifications_v2'] = [];
+  store.keys['ota_requests_v2'] = [];
+  store.keys['ota_absences_v1'] = [];
+  store.keys['ota_chat_messages'] = [];
+  store.keys['ota_audit_logs_v1'] = [];
+  store.keys['ota_exams'] = [];
+  store.keys['ota_pending_verifications_v1'] = [];
+  pendingEmailVerifications.clear();
+
+  // 4. Clean faculty list (always purge synthetic/test accounts; optionally clear all teachers if requested)
+  if (clearTeachers === true) {
+    store.keys['ota_teachers_v3'] = [];
+    for (const vKey of Object.keys(serverVault)) {
+      if (serverVault[vKey]?.role === 'TEACHER') {
+        delete serverVault[vKey];
+      }
+    }
+  } else {
+    const rawTeachers = Array.isArray(store.keys['ota_teachers_v3'])
+      ? store.keys['ota_teachers_v3']
+      : Object.values(store.keys['ota_teachers_v3'] || {});
+    const cleanTeachers = rawTeachers.filter((t: any) => t && !isSyntheticTestTeacher(t));
+    store.keys['ota_teachers_v3'] = cleanTeachers;
+    const validTeacherIds = new Set(cleanTeachers.map((t: any) => t.id));
+    for (const [vKey, vEntry] of Object.entries(serverVault)) {
+      if (vEntry?.role === 'TEACHER' && !validTeacherIds.has(vKey)) {
+        delete serverVault[vKey];
+      }
+    }
+  }
+
+  store.version = Date.now();
+
+  // 5. Persist everything atomically to Cloud Firestore
+  try {
+    await Promise.all([
+      deleteOtaStoreDocFromFirestore('ota_timetable_v2'),
+      deleteOtaStoreDocFromFirestore('ota_timetable_draft_v1'),
+      deleteOtaStoreDocFromFirestore('app_state'),
+      syncOtaStoreDocToFirestore('ota_timetable_metadata_v1', draftZeroMeta),
+      syncOtaStoreDocToFirestore('ota_history_v2', []),
+      syncOtaStoreDocToFirestore('ota_notifications_v2', []),
+      syncOtaStoreDocToFirestore('ota_requests_v2', []),
+      syncOtaStoreDocToFirestore('ota_absences_v1', []),
+      syncOtaStoreDocToFirestore('ota_chat_messages', []),
+      syncOtaStoreDocToFirestore('ota_audit_logs_v1', []),
+      syncOtaStoreDocToFirestore('ota_exams', []),
+      syncOtaStoreDocToFirestore('ota_pending_verifications_v1', []),
+      syncTeachersAndVaultToFirestore(store.keys['ota_teachers_v3'])
+    ]);
+  } catch (err: any) {
+    console.error('[Prepare School Ready] Firestore sync error:', err);
+    return res.status(500).json({ success: false, error: 'Failed syncing clean school state to Firestore: ' + (err?.message || 'Error') });
+  }
+
+  broadcastToClients('reset', { version: store.version, keys: getSanitizedKeys('ADMIN') });
+
+  const teachersCount = Array.isArray(store.keys['ota_teachers_v3']) ? store.keys['ota_teachers_v3'].length : 0;
+  return res.json({
+    success: true,
+    version: store.version,
+    revisionId: 0,
+    teachersRemaining: teachersCount,
+    message: `App prepared for school handover: Draft #0, no published timetable, 0 inbox messages (${teachersCount} faculty kept).`
+  });
+});
+
+app.post('/api/developer/selective-purge', async (req, res) => {
   const { password, target } = req.body;
   if (password !== DEVELOPER_PASSPHRASE) {
     return res.status(401).json({ success: false, error: 'Unauthorized developer passphrase' });
   }
 
   store.version = Date.now();
+  const changedKeys: Record<string, any> = {};
   if (target === 'timetable') {
     delete store.keys['ota_timetable_v2'];
     delete store.keys['ota_history_v2'];
-    deleteOtaStoreDocFromFirestore('ota_timetable_v2');
-    deleteOtaStoreDocFromFirestore('ota_history_v2');
+    await deleteOtaStoreDocFromFirestore('ota_timetable_v2');
+    await deleteOtaStoreDocFromFirestore('ota_history_v2');
+    changedKeys['ota_timetable_v2'] = null;
+    changedKeys['ota_history_v2'] = null;
   } else if (target === 'teachers') {
     store.keys['ota_teachers_v3'] = [];
     delete store.keys['ota_absences_v1'];
     delete store.keys['ota_requests_v2'];
-    syncOtaStoreDocToFirestore('ota_teachers_v3', []);
-    deleteOtaStoreDocFromFirestore('ota_absences_v1');
-    deleteOtaStoreDocFromFirestore('ota_requests_v2');
+    for (const [id, entry] of Object.entries(serverVault)) {
+      if (entry?.role === 'TEACHER') delete serverVault[id];
+    }
+    await syncOtaStoreDocToFirestore('ota_teachers_v3', []);
+    await syncOtaStoreDocToFirestore('ota_server_vault_v1', encryptVault(serverVault));
+    await deleteOtaStoreDocFromFirestore('ota_absences_v1');
+    await deleteOtaStoreDocFromFirestore('ota_requests_v2');
+    changedKeys['ota_teachers_v3'] = [];
+  } else if (target === 'draft') {
+    delete store.keys['ota_timetable_draft_v1'];
+    await deleteOtaStoreDocFromFirestore('ota_timetable_draft_v1');
+    changedKeys['ota_timetable_draft_v1'] = null;
+  } else if (target === 'requests') {
+    store.keys['ota_requests_v2'] = [];
+    store.keys['ota_absences_v1'] = [];
+    await syncOtaStoreDocToFirestore('ota_requests_v2', []);
+    await syncOtaStoreDocToFirestore('ota_absences_v1', []);
+    changedKeys['ota_requests_v2'] = [];
+    changedKeys['ota_absences_v1'] = [];
   } else if (target === 'curriculum') {
     store.keys['ota_subjects_v2'] = [...ALL_SUBJECTS];
-    syncOtaStoreDocToFirestore('ota_subjects_v2', store.keys['ota_subjects_v2']);
+    await syncOtaStoreDocToFirestore('ota_subjects_v2', store.keys['ota_subjects_v2']);
+    changedKeys['ota_subjects_v2'] = store.keys['ota_subjects_v2'];
   } else if (target === 'logs') {
     store.keys['ota_audit_logs_v1'] = [];
     store.keys['ota_chat_messages'] = [];
     store.keys['ota_notifications_v2'] = [];
-    deleteOtaStoreDocFromFirestore('ota_audit_logs_v1');
-    deleteOtaStoreDocFromFirestore('ota_chat_messages');
-    deleteOtaStoreDocFromFirestore('ota_notifications_v2');
+    await deleteOtaStoreDocFromFirestore('ota_audit_logs_v1');
+    await deleteOtaStoreDocFromFirestore('ota_chat_messages');
+    await deleteOtaStoreDocFromFirestore('ota_notifications_v2');
+    changedKeys['ota_audit_logs_v1'] = [];
+    changedKeys['ota_chat_messages'] = [];
+    changedKeys['ota_notifications_v2'] = [];
   }
 
-  saveStoreToDisk();
-  broadcastToClients('update', { version: store.version, key: target });
+  broadcastToClients('update', { version: store.version, key: target, changedKeys });
   res.json({ success: true, target });
 });
 
@@ -4062,6 +4499,689 @@ app.post('/api/developer/restore', (req, res) => {
   res.status(400).json({ success: false, error: 'Invalid restore payload' });
 });
 
+app.post('/api/developer/teacher-action', async (req, res) => {
+  const { password, teacherId, action, newPassword, reason } = req.body || {};
+  if (password !== DEVELOPER_PASSPHRASE) {
+    return res.status(401).json({ success: false, error: 'Unauthorized developer passphrase' });
+  }
+  const teachersObj = store.keys['ota_teachers_v3'] || [];
+  let teacherList: any[] = Array.isArray(teachersObj) ? [...teachersObj] : Object.values(teachersObj);
+  const idx = teacherList.findIndex((t: any) => t && t.id === teacherId);
+  if (idx === -1) {
+    return res.status(404).json({ success: false, error: 'Teacher not found' });
+  }
+
+  const target = { ...teacherList[idx] };
+  let message = '';
+
+  if (action === 'APPROVE') {
+    target.isApproved = true;
+    target.approvalStatus = 'APPROVED';
+    delete target.rejectionReason;
+    teacherList[idx] = target;
+    message = `Approved teacher account: ${target.name}`;
+  } else if (action === 'REJECT') {
+    target.isApproved = false;
+    target.approvalStatus = 'REJECTED';
+    target.rejectionReason = reason || 'Rejected via Developer Console';
+    teacherList[idx] = target;
+    message = `Rejected teacher account: ${target.name}`;
+  } else if (action === 'RESET_ONBOARDING') {
+    target.isCompleted = false;
+    teacherList[idx] = target;
+    message = `Reset onboarding wizard for ${target.name}`;
+  } else if (action === 'SET_PASSWORD') {
+    const cleanPass = String(newPassword || '');
+    if (cleanPass.length < 6) {
+      return res.status(400).json({ success: false, error: 'Password must be at least 6 characters.' });
+    }
+    const hash = bcrypt.hashSync(cleanPass, 10);
+    target.password = hash;
+    target.mustChangePassword = false;
+    teacherList[idx] = target;
+    serverVault[target.id] = {
+      passwordHash: hash,
+      role: 'TEACHER',
+      email: (target.contactEmail || target.email || '').trim().toLowerCase(),
+      username: (target.username || '').trim().toLowerCase()
+    };
+    message = `Password updated for ${target.name} (@${target.username})`;
+  } else if (action === 'DELETE') {
+    teacherList = teacherList.filter((t: any) => t && t.id !== teacherId);
+    delete serverVault[teacherId];
+    const cleanGridSlots = (gridObj: any) => {
+      if (!gridObj || typeof gridObj !== 'object') return;
+      for (const cId in gridObj) {
+        const days = gridObj[cId];
+        if (!days || typeof days !== 'object') continue;
+        for (const d in days) {
+          const periods = days[d];
+          if (!periods || typeof periods !== 'object') continue;
+          for (const p in periods) {
+            const cell = periods[p];
+            if (!cell) continue;
+            if (cell.teacherId === teacherId) {
+              cell.teacherId = '';
+              cell.teacherName = 'Unassigned';
+            }
+            if (Array.isArray(cell.teacherIds)) {
+              cell.teacherIds = cell.teacherIds.filter((id: string) => id !== teacherId);
+            }
+          }
+        }
+      }
+    };
+    cleanGridSlots(store.keys['ota_timetable_v2']);
+    cleanGridSlots(store.keys['ota_timetable_draft_v1']);
+    message = `Deleted teacher ${target.name} (@${target.username}) and cleared timetable references`;
+  } else {
+    return res.status(400).json({ success: false, error: 'Unknown action' });
+  }
+
+  let autoBindRes = { publishedBoundCount: 0, draftBoundCount: 0, totalBoundCount: 0, changedKeys: {} as Record<string, any> };
+  if (action === 'APPROVE') {
+    autoBindRes = await autoBindTeacherToActiveTimetables(target);
+    if (autoBindRes.publishedBoundCount > 0) {
+      message += ` & bound to ${autoBindRes.publishedBoundCount} timetable slot(s)`;
+    }
+  }
+
+  store.keys['ota_teachers_v3'] = teacherList;
+  store.version = Date.now();
+  await syncTeachersAndVaultToFirestore(teacherList);
+  if (action === 'DELETE') {
+    if (store.keys['ota_timetable_v2']) {
+      await syncOtaStoreDocToFirestore('ota_timetable_v2', store.keys['ota_timetable_v2']);
+    }
+    if (store.keys['ota_timetable_draft_v1']) {
+      await syncOtaStoreDocToFirestore('ota_timetable_draft_v1', store.keys['ota_timetable_draft_v1']);
+    }
+  }
+  broadcastToClients('update', {
+    version: store.version,
+    changedKeys: {
+      ota_teachers_v3: teacherList.map((t: any) => sanitizeTeacherRecord(t, false)),
+      ...(action === 'DELETE' && store.keys['ota_timetable_v2'] ? { ota_timetable_v2: store.keys['ota_timetable_v2'] } : {}),
+      ...autoBindRes.changedKeys
+    }
+  });
+  return res.json({ success: true, message, autoBoundCount: autoBindRes.publishedBoundCount });
+});
+
+app.post('/api/developer/purge-fake-teachers', async (req, res) => {
+  const { password } = req.body || {};
+  if (password !== DEVELOPER_PASSPHRASE) {
+    return res.status(401).json({ success: false, error: 'Unauthorized developer passphrase' });
+  }
+  const teachersObj = store.keys['ota_teachers_v3'] || [];
+  const teacherList: any[] = Array.isArray(teachersObj) ? teachersObj : Object.values(teachersObj);
+  const removed = teacherList.filter((t: any) => isSyntheticTestTeacher(t));
+  const kept = teacherList.filter((t: any) => !isSyntheticTestTeacher(t));
+  const removedIds = new Set(removed.map((t: any) => t?.id).filter(Boolean));
+
+  removedIds.forEach((id: string) => { delete serverVault[id]; });
+  for (const [k, entry] of Object.entries(serverVault)) {
+    if (entry?.role === 'TEACHER' && (k.startsWith('tch_demo_') || entry.username === 'adalovelace' || entry.username?.startsWith('sync_') || entry.username?.startsWith('matrix_'))) {
+      delete serverVault[k];
+    }
+  }
+
+  for (const [emailKey, p] of pendingEmailVerifications.entries()) {
+    if (isSyntheticTestTeacher(p)) pendingEmailVerifications.delete(emailKey);
+  }
+
+  const timetable = store.keys['ota_timetable_v2'];
+  let clearedSlots = 0;
+  if (timetable && typeof timetable === 'object') {
+    for (const cId in timetable) {
+      const days = timetable[cId];
+      if (!days || typeof days !== 'object') continue;
+      for (const d in days) {
+        const periods = days[d];
+        if (!periods || typeof periods !== 'object') continue;
+        for (const p in periods) {
+          const cell = periods[p];
+          if (!cell) continue;
+          if (cell.teacherId && removedIds.has(cell.teacherId)) {
+            cell.teacherId = '';
+            cell.teacherName = 'Unassigned';
+            clearedSlots++;
+          }
+          if (Array.isArray(cell.teacherIds)) {
+            cell.teacherIds = cell.teacherIds.filter((id: string) => !removedIds.has(id));
+          }
+        }
+      }
+    }
+  }
+
+  store.keys['ota_teachers_v3'] = kept;
+  store.version = Date.now();
+  await syncTeachersAndVaultToFirestore(kept);
+  if (clearedSlots > 0 && timetable) {
+    await syncOtaStoreDocToFirestore('ota_timetable_v2', timetable);
+  }
+  broadcastToClients('update', {
+    version: store.version,
+    changedKeys: {
+      ota_teachers_v3: kept.map((t: any) => sanitizeTeacherRecord(t, false)),
+      ...(clearedSlots > 0 && timetable ? { ota_timetable_v2: timetable } : {})
+    }
+  });
+  return res.json({
+    success: true,
+    removedCount: removed.length,
+    removedNames: removed.map((r: any) => r?.name || r?.username || r?.id),
+    clearedSlots,
+    message: removed.length > 0
+      ? `Removed ${removed.length} fake/test teacher(s): ${removed.map((r: any) => r?.name).join(', ')}`
+      : 'No fake/test teachers found in Firestore or memory.'
+  });
+});
+
+app.post('/api/developer/scan-integrity', (req, res) => {
+  const { password } = req.body || {};
+  if (password !== DEVELOPER_PASSPHRASE) {
+    return res.status(401).json({ success: false, error: 'Unauthorized developer passphrase' });
+  }
+  const teachers: any[] = Array.isArray(store.keys['ota_teachers_v3']) ? store.keys['ota_teachers_v3'] : Object.values(store.keys['ota_teachers_v3'] || {});
+  const classes: any[] = Array.isArray(store.keys['ota_classes']) ? store.keys['ota_classes'] : Object.values(store.keys['ota_classes'] || {});
+  const timetable = store.keys['ota_timetable_v2'] || {};
+  const validTeacherIds = new Set(teachers.map((t: any) => t?.id).filter(Boolean));
+
+  const issues: { severity: 'HIGH' | 'MEDIUM' | 'LOW'; category: string; message: string }[] = [];
+  const fakeTeachers = teachers.filter((t: any) => isSyntheticTestTeacher(t));
+  if (fakeTeachers.length > 0) {
+    issues.push({
+      severity: 'HIGH',
+      category: 'Fake Faculty',
+      message: `${fakeTeachers.length} synthetic/test teacher account(s) found: ${fakeTeachers.map((t: any) => `${t.name} (@${t.username})`).join(', ')}`
+    });
+  }
+
+  let orphanedSlots = 0;
+  let teacherDoubleBookings = 0;
+  let roomDoubleBookings = 0;
+  let streamViolations = 0;
+
+  for (let d = 0; d < 5; d++) {
+    for (let p = 0; p < 8; p++) {
+      const seenTeachers = new Map<string, string>();
+      const seenRooms = new Map<string, string>();
+      for (const cls of classes) {
+        const cell = timetable?.[cls.id]?.[d]?.[p];
+        if (!cell || !cell.subjectId || cell.subjectId === 'FREE' || cell.subjectId === 'WORSHIP') continue;
+
+        if (cell.teacherId && cell.teacherId !== 'SYSTEM' && !validTeacherIds.has(cell.teacherId)) {
+          orphanedSlots++;
+        }
+        if (cell.teacherId && cell.teacherId !== 'SYSTEM') {
+          if (seenTeachers.has(cell.teacherId)) {
+            teacherDoubleBookings++;
+          } else {
+            seenTeachers.set(cell.teacherId, cls.id);
+          }
+        }
+        if (cell.roomId) {
+          if (seenRooms.has(cell.roomId)) {
+            roomDoubleBookings++;
+          } else {
+            seenRooms.set(cell.roomId, cls.id);
+          }
+        }
+        if (/SS\d+A\d*/i.test(cls.id)) {
+          const sId = String(cell.subjectId || '').toLowerCase();
+          if (sId === 'eco_sci' || sId === 'yor_sci' || sId.endsWith('_bc')) {
+            streamViolations++;
+          }
+        }
+      }
+    }
+  }
+
+  if (orphanedSlots > 0) issues.push({ severity: 'MEDIUM', category: 'Orphaned Teachers', message: `${orphanedSlots} timetable period(s) reference missing/deleted teachers.` });
+  if (teacherDoubleBookings > 0) issues.push({ severity: 'HIGH', category: 'Teacher Clashes', message: `${teacherDoubleBookings} teacher double-booking conflict(s) detected.` });
+  if (roomDoubleBookings > 0) issues.push({ severity: 'MEDIUM', category: 'Room Clashes', message: `${roomDoubleBookings} room double-booking conflict(s) detected.` });
+  if (streamViolations > 0) issues.push({ severity: 'HIGH', category: 'Stream Violations', message: `${streamViolations} Commercial/BC subject slot(s) placed in Science ("A") classes.` });
+
+  const pendingApprovals = teachers.filter((t: any) => t && t.isApproved === false && t.approvalStatus !== 'REJECTED').length;
+  if (pendingApprovals > 0) {
+    issues.push({ severity: 'LOW', category: 'Pending Approvals', message: `${pendingApprovals} teacher registration(s) awaiting Admin review.` });
+  }
+
+  return res.json({
+    success: true,
+    healthy: issues.filter(i => i.severity !== 'LOW').length === 0,
+    summary: {
+      teachers: teachers.length,
+      classes: classes.length,
+      orphanedSlots,
+      teacherDoubleBookings,
+      roomDoubleBookings,
+      streamViolations,
+      pendingApprovals
+    },
+    issues
+  });
+});
+
+app.post('/api/developer/test-email', async (req, res) => {
+  const { password, toEmail } = req.body || {};
+  if (password !== DEVELOPER_PASSPHRASE) {
+    return res.status(401).json({ success: false, error: 'Unauthorized developer passphrase' });
+  }
+  const targetEmail = String(toEmail || '').trim().toLowerCase();
+  if (!targetEmail || !targetEmail.includes('@')) {
+    return res.status(400).json({ success: false, error: 'Please enter a valid recipient email address.' });
+  }
+  const result = await sendEmailMessage({
+    to: targetEmail,
+    subject: 'Pentric Developer Console — Email Delivery Test',
+    text: `Email delivery diagnostic succeeded at ${new Date().toISOString()}.`,
+    html: `<div style="font-family:sans-serif;padding:20px;background:#f8fafc;border-radius:12px;"><h2 style="color:#0f172a;margin:0 0 8px 0;">Email Delivery Test</h2><p style="color:#475569;margin:0;">Your Pentric server successfully dispatched this diagnostic email at <strong>${new Date().toISOString()}</strong>.</p></div>`
+  });
+  return res.json({
+    success: result.success,
+    transport: result.transport || null,
+    sender: result.sender || null,
+    error: result.error || null
+  });
+});
+
+app.post('/api/developer/delete-pending-verification', async (req, res) => {
+  const { password, email } = req.body || {};
+  if (password !== DEVELOPER_PASSPHRASE) {
+    return res.status(401).json({ success: false, error: 'Unauthorized developer passphrase' });
+  }
+  const clean = String(email || '').trim().toLowerCase();
+  pendingEmailVerifications.delete(clean);
+  const remaining = Array.from(pendingEmailVerifications.values());
+  await syncOtaStoreDocToFirestore('ota_pending_verifications_v1', remaining);
+  return res.json({ success: true, remainingCount: remaining.length });
+});
+
+app.get('/api/developer/store-keys', (req, res) => {
+  if (req.query.password !== 'proxonline26') {
+    return res.status(401).json({ success: false, error: 'Unauthorized developer access' });
+  }
+  const sanitized = getSanitizedKeys('ADMIN');
+  const keys = Object.entries(sanitized).map(([key, value]) => {
+    const raw = JSON.stringify(value ?? null);
+    const count = Array.isArray(value)
+      ? value.length
+      : value && typeof value === 'object'
+        ? Object.keys(value).length
+        : 1;
+    return {
+      key,
+      type: Array.isArray(value) ? 'array' : typeof value,
+      count,
+      bytes: Buffer.byteLength(raw, 'utf8'),
+      preview: raw.length > 3500 ? raw.slice(0, 3500) + '...' : raw
+    };
+  });
+  return res.json({ success: true, keys });
+});
+
+// Full Live Firebase Firestore Explorer & Editor Endpoints
+const FIREBASE_ALLOWED_COLLECTIONS = ['ota_app_store', 'schools', 'ota_sync_diagnostics'] as const;
+type FirebaseCollectionName = typeof FIREBASE_ALLOWED_COLLECTIONS[number];
+
+app.get('/api/developer/firebase/explorer', async (req, res) => {
+  const pass = req.query.password || req.headers['x-developer-password'];
+  if (pass !== DEVELOPER_PASSPHRASE) {
+    return res.status(401).json({ success: false, error: 'Unauthorized developer access' });
+  }
+
+  const targetCol = req.query.collection as string | undefined;
+  const includeData = req.query.includeData === '1';
+  const collectionsToFetch: FirebaseCollectionName[] = targetCol && (FIREBASE_ALLOWED_COLLECTIONS as readonly string[]).includes(targetCol)
+    ? [targetCol as FirebaseCollectionName]
+    : [...FIREBASE_ALLOWED_COLLECTIONS];
+
+  const documents: {
+    collection: FirebaseCollectionName;
+    id: string;
+    updatedAt: number | null;
+    bytes: number;
+    itemCount: number;
+    data?: any;
+  }[] = [];
+
+  const collectionStats: Record<string, { count: number; totalBytes: number }> = {};
+
+  try {
+    const results = await Promise.all(
+      collectionsToFetch.map(async (colName) => {
+        let rows: { id: string; rawData: any }[] = [];
+        try {
+          if (hasAdminCredentials && adminDb) {
+            const snap = await adminDb.collection(colName).get();
+            rows = snap.docs.map(d => ({ id: d.id, rawData: d.data() }));
+          } else if (clientDb) {
+            const snap = await getDocs(collection(clientDb, colName));
+            rows = snap.docs.map(d => ({ id: d.id, rawData: d.data() }));
+          }
+          return { colName, rows, error: null as any };
+        } catch (colErr: any) {
+          return { colName, rows: [], error: colErr };
+        }
+      })
+    );
+
+    for (const r of results) {
+      if (r.error) {
+        console.error(`[Firebase Explorer] Failed reading ${r.colName}:`, r.error?.message || r.error);
+        return res.status(500).json({
+          success: false,
+          error: JSON.stringify({
+            operationType: 'list',
+            path: r.colName,
+            error: r.error?.message || String(r.error)
+          })
+        });
+      }
+
+      let totalBytes = 0;
+      for (const { id, rawData } of r.rows) {
+        const displayData = r.colName === 'ota_app_store' && rawData && 'payload' in rawData
+          ? rawData.payload
+          : rawData;
+        const jsonStr = JSON.stringify(displayData ?? null);
+        const bytes = Buffer.byteLength(jsonStr, 'utf8');
+        totalBytes += bytes;
+        const itemCount = Array.isArray(displayData)
+          ? displayData.length
+          : displayData && typeof displayData === 'object'
+            ? Object.keys(displayData).length
+            : 1;
+        const updatedAt = typeof rawData?.updatedAt === 'number'
+          ? rawData.updatedAt
+          : typeof rawData?.timestamp === 'number'
+            ? rawData.timestamp
+            : null;
+
+        documents.push({
+          collection: r.colName,
+          id,
+          updatedAt,
+          bytes,
+          itemCount,
+          ...(includeData ? { data: displayData ?? null } : {})
+        });
+      }
+
+      collectionStats[r.colName] = { count: r.rows.length, totalBytes };
+    }
+
+    documents.sort((a, b) => {
+      if (a.collection !== b.collection) return a.collection.localeCompare(b.collection);
+      return a.id.localeCompare(b.id);
+    });
+
+    return res.json({
+      success: true,
+      projectId: firebaseConfigJson.projectId || 'ota-smart-timetable',
+      databaseId: firebaseConfigJson.firestoreDatabaseId || 'ai-studio-otasmarttimetabl-5b72f609-12f9-471e-8ea2-d4f3daede4d4',
+      collections: FIREBASE_ALLOWED_COLLECTIONS,
+      collectionStats,
+      documents
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Failed to read Firebase Firestore' });
+  }
+});
+
+app.get('/api/developer/firebase/doc', async (req, res) => {
+  const pass = req.query.password || req.headers['x-developer-password'];
+  if (pass !== DEVELOPER_PASSPHRASE) {
+    return res.status(401).json({ success: false, error: 'Unauthorized developer access' });
+  }
+
+  const colName = String(req.query.collectionName || '').trim() as FirebaseCollectionName;
+  const cleanId = String(req.query.docId || '').trim();
+  if (!(FIREBASE_ALLOWED_COLLECTIONS as readonly string[]).includes(colName)) {
+    return res.status(400).json({ success: false, error: 'Invalid collection.' });
+  }
+  if (!cleanId || !/^[a-zA-Z0-9_-]+$/.test(cleanId)) {
+    return res.status(400).json({ success: false, error: 'Invalid document ID.' });
+  }
+
+  try {
+    let rawData: any = null;
+    let exists = false;
+    if (hasAdminCredentials && adminDb) {
+      const snap = await adminDb.collection(colName).doc(cleanId).get();
+      exists = snap.exists;
+      if (exists) rawData = snap.data();
+    } else if (clientDb) {
+      const snap = await getDoc(doc(clientDb, colName, cleanId));
+      exists = snap.exists();
+      if (exists) rawData = snap.data();
+    }
+    if (!exists) {
+      return res.status(404).json({ success: false, error: `Document ${colName}/${cleanId} not found in Firestore.` });
+    }
+
+    const displayData = colName === 'ota_app_store' && rawData && 'payload' in rawData
+      ? rawData.payload
+      : rawData;
+    const jsonStr = JSON.stringify(displayData ?? null);
+    const bytes = Buffer.byteLength(jsonStr, 'utf8');
+    const itemCount = Array.isArray(displayData)
+      ? displayData.length
+      : displayData && typeof displayData === 'object'
+        ? Object.keys(displayData).length
+        : 1;
+    const updatedAt = typeof rawData?.updatedAt === 'number'
+      ? rawData.updatedAt
+      : typeof rawData?.timestamp === 'number'
+        ? rawData.timestamp
+        : null;
+
+    return res.json({
+      success: true,
+      document: {
+        collection: colName,
+        id: cleanId,
+        updatedAt,
+        bytes,
+        itemCount,
+        data: displayData ?? null
+      }
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: JSON.stringify({
+        operationType: 'get',
+        path: `${colName}/${cleanId}`,
+        error: err?.message || String(err)
+      })
+    });
+  }
+});
+
+app.post('/api/developer/firebase/set-doc', async (req, res) => {
+  const { password, collectionName, docId, data } = req.body || {};
+  if (password !== DEVELOPER_PASSPHRASE) {
+    return res.status(401).json({ success: false, error: 'Unauthorized developer passphrase' });
+  }
+  if (!(FIREBASE_ALLOWED_COLLECTIONS as readonly string[]).includes(collectionName)) {
+    return res.status(400).json({ success: false, error: 'Invalid collection. Allowed: ota_app_store, schools, ota_sync_diagnostics.' });
+  }
+  const cleanId = String(docId || '').trim();
+  if (!cleanId || cleanId.length > 128 || !/^[a-zA-Z0-9_-]+$/.test(cleanId)) {
+    return res.status(400).json({ success: false, error: 'Document ID must use only letters, numbers, underscores, or hyphens (1–128 chars).' });
+  }
+  if (collectionName === 'ota_app_store' && cleanId.length < 3) {
+    return res.status(400).json({ success: false, error: 'ota_app_store document IDs must be at least 3 characters (per firestore.rules).' });
+  }
+
+  let parsedData: any;
+  try {
+    parsedData = typeof data === 'string' ? JSON.parse(data) : data;
+  } catch (parseErr: any) {
+    return res.status(400).json({ success: false, error: `Invalid JSON: ${parseErr?.message}` });
+  }
+
+  try {
+    const now = Date.now();
+    if (collectionName === 'ota_app_store') {
+      const payload = parsedData && typeof parsedData === 'object' && 'payload' in parsedData && 'updatedAt' in parsedData && Object.keys(parsedData).length <= 2
+        ? parsedData.payload
+        : parsedData;
+      const docToWrite = { payload: JSON.parse(JSON.stringify(payload ?? null)), updatedAt: now };
+
+      const ok = await syncOtaStoreDocToFirestore(cleanId, docToWrite.payload);
+      if (!ok) {
+        return res.status(500).json({ success: false, error: 'Failed writing document to Firebase Firestore.' });
+      }
+
+      if (cleanId !== 'app_state' && cleanId !== 'ota_server_vault_v1') {
+        if (cleanId === 'ota_pending_verifications_v1') {
+          pendingEmailVerifications.clear();
+          if (Array.isArray(docToWrite.payload)) {
+            docToWrite.payload.forEach((item: any) => {
+              if (item && item.email) pendingEmailVerifications.set(String(item.email).toLowerCase(), item);
+            });
+          }
+        } else {
+          store.keys[cleanId] = docToWrite.payload;
+          if (cleanId === 'ota_teachers_v3' || cleanId === 'ota_admins') {
+            populateServerVaultFromMemory();
+          }
+        }
+        store.version = now;
+        broadcastToClients('update', {
+          version: store.version,
+          key: cleanId,
+          changedKeys: { [cleanId]: getSanitizedKeys('ADMIN')[cleanId] ?? docToWrite.payload }
+        });
+      } else if (cleanId === 'ota_server_vault_v1' && docToWrite.payload?.encrypted) {
+        const dec = decryptVault(docToWrite.payload);
+        if (dec && typeof dec === 'object') Object.assign(serverVault, dec);
+      }
+
+      return res.json({
+        success: true,
+        collection: collectionName,
+        docId: cleanId,
+        updatedAt: now,
+        message: `Saved ${collectionName}/${cleanId} to Cloud Firestore.`
+      });
+    }
+
+    if (collectionName === 'schools') {
+      if (!parsedData || typeof parsedData !== 'object') {
+        return res.status(400).json({ success: false, error: 'School document must be a JSON object.' });
+      }
+      const schoolDoc = {
+        ...parsedData,
+        id: cleanId,
+        name: String(parsedData.name || cleanId).slice(0, 120),
+        code: String(parsedData.code || cleanId.slice(0, 6).toUpperCase()).slice(0, 10),
+        createdAt: typeof parsedData.createdAt === 'number' ? parsedData.createdAt : now,
+        updatedAt: now
+      };
+      if (schoolDoc.name.length < 3 || schoolDoc.code.length < 2) {
+        return res.status(400).json({ success: false, error: 'School requires name (>=3 chars) and code (>=2 chars).' });
+      }
+      const ok = await syncSchoolDocToFirestore(schoolDoc);
+      if (!ok) {
+        return res.status(500).json({ success: false, error: 'Failed writing school document to Firebase Firestore.' });
+      }
+      const currentSchools = Array.isArray(store.keys['ota_schools_v1']) ? [...store.keys['ota_schools_v1']] : [];
+      const sIdx = currentSchools.findIndex((s: any) => s && s.id === cleanId);
+      if (sIdx >= 0) currentSchools[sIdx] = schoolDoc;
+      else currentSchools.push(schoolDoc);
+      store.keys['ota_schools_v1'] = currentSchools;
+      await syncOtaStoreDocToFirestore('ota_schools_v1', currentSchools);
+      store.version = now;
+      broadcastToClients('update', { version: store.version, key: 'ota_schools_v1', changedKeys: { ota_schools_v1: currentSchools } });
+      return res.json({ success: true, collection: collectionName, docId: cleanId, updatedAt: now, message: `Saved schools/${cleanId} to Cloud Firestore.` });
+    }
+
+    // ota_sync_diagnostics
+    if (!parsedData || typeof parsedData !== 'object') {
+      return res.status(400).json({ success: false, error: 'Diagnostic document must be a JSON object.' });
+    }
+    const diagDoc = {
+      ...parsedData,
+      deviceId: String(parsedData.deviceId || cleanId).slice(0, 128),
+      timestamp: typeof parsedData.timestamp === 'number' ? parsedData.timestamp : now
+    };
+    if (hasAdminCredentials && adminDb) {
+      await adminDb.collection('ota_sync_diagnostics').doc(cleanId).set(diagDoc);
+    } else if (clientDb) {
+      await setDoc(doc(clientDb, 'ota_sync_diagnostics', cleanId), diagDoc);
+    }
+    return res.json({ success: true, collection: collectionName, docId: cleanId, updatedAt: now, message: `Saved ota_sync_diagnostics/${cleanId} to Cloud Firestore.` });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: JSON.stringify({
+        operationType: 'write',
+        path: `${collectionName}/${cleanId}`,
+        error: err?.message || String(err)
+      })
+    });
+  }
+});
+
+app.post('/api/developer/firebase/delete-doc', async (req, res) => {
+  const { password, collectionName, docId } = req.body || {};
+  if (password !== DEVELOPER_PASSPHRASE) {
+    return res.status(401).json({ success: false, error: 'Unauthorized developer passphrase' });
+  }
+  if (!(FIREBASE_ALLOWED_COLLECTIONS as readonly string[]).includes(collectionName)) {
+    return res.status(400).json({ success: false, error: 'Invalid collection.' });
+  }
+  const cleanId = String(docId || '').trim();
+  if (!cleanId || !/^[a-zA-Z0-9_-]+$/.test(cleanId)) {
+    return res.status(400).json({ success: false, error: 'Invalid document ID.' });
+  }
+
+  try {
+    if (collectionName === 'ota_app_store') {
+      const ok = await deleteOtaStoreDocFromFirestore(cleanId);
+      if (!ok) return res.status(500).json({ success: false, error: 'Failed deleting Firestore document.' });
+      if (cleanId === 'ota_pending_verifications_v1') {
+        pendingEmailVerifications.clear();
+      } else {
+        delete store.keys[cleanId];
+      }
+      store.version = Date.now();
+      broadcastToClients('update', { version: store.version, key: cleanId, changedKeys: { [cleanId]: null } });
+    } else if (collectionName === 'schools') {
+      const ok = await deleteSchoolDocFromFirestore(cleanId);
+      if (!ok) return res.status(500).json({ success: false, error: 'Failed deleting school document.' });
+      if (Array.isArray(store.keys['ota_schools_v1'])) {
+        store.keys['ota_schools_v1'] = store.keys['ota_schools_v1'].filter((s: any) => s && s.id !== cleanId);
+        await syncOtaStoreDocToFirestore('ota_schools_v1', store.keys['ota_schools_v1']);
+        store.version = Date.now();
+        broadcastToClients('update', { version: store.version, key: 'ota_schools_v1', changedKeys: { ota_schools_v1: store.keys['ota_schools_v1'] } });
+      }
+    } else {
+      if (hasAdminCredentials && adminDb) {
+        await adminDb.collection('ota_sync_diagnostics').doc(cleanId).delete();
+      } else if (clientDb) {
+        await deleteDoc(doc(clientDb, 'ota_sync_diagnostics', cleanId));
+      }
+    }
+    return res.json({ success: true, message: `Deleted ${collectionName}/${cleanId} from Cloud Firestore.` });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: JSON.stringify({
+        operationType: 'delete',
+        path: `${collectionName}/${cleanId}`,
+        error: err?.message || String(err)
+      })
+    });
+  }
+});
+
 app.get('/api/developer/telemetry', (req, res) => {
   const pass = req.query.password || req.headers['x-developer-password'];
   if (pass !== DEVELOPER_PASSPHRASE) {
@@ -4071,9 +5191,12 @@ app.get('/api/developer/telemetry', (req, res) => {
   const memory = process.memoryUsage();
   const uptimeSeconds = process.uptime();
   const classCount = Array.isArray(store.keys['ota_classes']) ? store.keys['ota_classes'].length : Object.keys(store.keys['ota_classes'] || {}).length;
-  const teacherCount = Array.isArray(store.keys['ota_teachers_v3']) ? store.keys['ota_teachers_v3'].length : Object.keys(store.keys['ota_teachers_v3'] || {}).length;
+  const teachersArr: any[] = Array.isArray(store.keys['ota_teachers_v3']) ? store.keys['ota_teachers_v3'] : Object.values(store.keys['ota_teachers_v3'] || {});
+  const teacherCount = teachersArr.length;
+  const pendingApprovals = teachersArr.filter((t: any) => t && t.isApproved === false && t.approvalStatus !== 'REJECTED').length;
   const subjectCount = Array.isArray(store.keys['ota_subjects_v2']) ? store.keys['ota_subjects_v2'].length : Object.keys(store.keys['ota_subjects_v2'] || {}).length;
   const timetableClasses = Object.keys(store.keys['ota_timetable_v2'] || {}).length;
+  const requestCount = Array.isArray(store.keys['ota_requests_v2']) ? store.keys['ota_requests_v2'].length : 0;
 
   res.json({
     status: 'ONLINE',
@@ -4082,8 +5205,16 @@ app.get('/api/developer/telemetry', (req, res) => {
     storeVersion: store.version,
     classCount,
     teacherCount,
+    pendingApprovals,
+    pendingVerifications: pendingEmailVerifications.size,
     subjectCount,
     timetableClasses,
+    requestCount,
+    sseClients: sseClients.length,
+    emailConfigured: {
+      resend: Boolean((process.env.RESEND_API_KEY || '').trim()),
+      smtp: Boolean((process.env.SMTP_USER || '').trim() && (process.env.SMTP_PASS || '').trim())
+    },
     projectId: 'ota-smart-timetable',
     databaseId: 'ai-studio-otasmarttimetabl-5b72f609-12f9-471e-8ea2-d4f3daede4d4'
   });
@@ -4092,26 +5223,73 @@ app.get('/api/developer/telemetry', (req, res) => {
 
 // Vite & Static file serving
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test') {
+  // Hydrate authoritative Firebase Firestore data BEFORE seeding defaults or accepting requests
+  await hydrateStoreFromFirestore();
+  runPasswordMigration();
+  const preSeedTeachersCount = Array.isArray(store.keys['ota_teachers_v3']) ? store.keys['ota_teachers_v3'].length : 0;
+  seedDefaultStoreData();
+  const postSeedTeachersCount = Array.isArray(store.keys['ota_teachers_v3']) ? store.keys['ota_teachers_v3'].length : 0;
+  populateServerVaultFromMemory();
+  if (postSeedTeachersCount !== preSeedTeachersCount) {
+    // Persist fake/synthetic teacher removal back to Cloud Firestore immediately
+    await syncTeachersAndVaultToFirestore().catch(() => {});
+  }
+  setupServerFirestoreListeners();
+
+  const isCompiledBundle = typeof __filename !== 'undefined' && __filename.endsWith('.cjs');
+  const isProdServing = process.env.NODE_ENV === 'production' || (isCompiledBundle && process.env.NODE_ENV !== 'test');
+
+  if (!isProdServing && process.env.NODE_ENV !== 'test') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa'
     });
     app.use(vite.middlewares);
-  } else if (process.env.NODE_ENV === 'production') {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+  } else if (isProdServing) {
+    const cwdDist = path.join(process.cwd(), 'dist');
+    const bundleDist = typeof __dirname !== 'undefined' ? __dirname : cwdDist;
+    const distPath = fs.existsSync(path.join(cwdDist, 'index.html')) ? cwdDist : bundleDist;
+
+    app.use(express.static(distPath, {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        }
+      }
+    }));
+
+    app.use('/api', (_req, res) => {
+      return res.status(404).json({ success: false, error: 'API endpoint not found' });
+    });
+
     app.use((req, res, next) => {
       if (req.method === 'GET' && !req.path.startsWith('/api')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         return res.sendFile(path.join(distPath, 'index.html'));
       }
       next();
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server listening on http://0.0.0.0:${PORT}`);
+  const httpServer = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server listening on http://0.0.0.0:${PORT} (mode=${isProdServing ? 'production' : (process.env.NODE_ENV || 'development')})`);
   });
+
+  const gracefulShutdown = (signal: string) => {
+    console.log(`[Server] Received ${signal}, shutting down gracefully...`);
+    for (const client of sseClients) {
+      try { client.res.end(); } catch {}
+    }
+    sseClients = [];
+    httpServer.close(() => {
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 5000).unref();
+  };
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 }
 
 startServer();

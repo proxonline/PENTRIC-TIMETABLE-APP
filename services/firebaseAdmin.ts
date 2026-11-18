@@ -7,11 +7,23 @@ import firebaseConfigJson from '../firebase-applet-config.json' with { type: 'js
 const projectId = process.env.VITE_FIREBASE_PROJECT_ID || firebaseConfigJson.projectId || 'ota-smart-timetable';
 const firestoreDatabaseId = firebaseConfigJson.firestoreDatabaseId;
 
+function parseServiceAccountJson(raw: string): any {
+  const trimmed = raw.trim();
+  const jsonText = trimmed.startsWith('{')
+    ? trimmed
+    : Buffer.from(trimmed, 'base64').toString('utf8');
+  const sa = JSON.parse(jsonText);
+  if (sa && typeof sa.private_key === 'string') {
+    sa.private_key = sa.private_key.replace(/\\n/g, '\n');
+  }
+  return sa;
+}
+
 function getCredential() {
   const credPath = process.env.GOOGLE_APPLICATION_CREDENTIALS_PATH || process.env.GOOGLE_APPLICATION_CREDENTIALS;
   if (credPath && fs.existsSync(credPath)) {
     try {
-      const sa = JSON.parse(fs.readFileSync(credPath, 'utf8'));
+      const sa = parseServiceAccountJson(fs.readFileSync(credPath, 'utf8'));
       console.log('[FirebaseAdmin] Loaded service account from file:', credPath);
       return cert(sa);
     } catch (e) {
@@ -20,10 +32,10 @@ function getCredential() {
   }
 
   const credJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-  if (credJson) {
+  if (credJson && credJson.trim()) {
     try {
-      const sa = JSON.parse(credJson);
-      console.log('[FirebaseAdmin] Loaded service account from environment JSON string');
+      const sa = parseServiceAccountJson(credJson);
+      console.log('[FirebaseAdmin] Loaded service account from environment variable');
       return cert(sa);
     } catch (e) {
       console.error('[FirebaseAdmin] Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY env var:', e);
@@ -34,7 +46,7 @@ function getCredential() {
   for (const p of fallbackPaths) {
     if (fs.existsSync(p)) {
       try {
-        const sa = JSON.parse(fs.readFileSync(p, 'utf8'));
+        const sa = parseServiceAccountJson(fs.readFileSync(p, 'utf8'));
         console.log('[FirebaseAdmin] Loaded service account from fallback path:', p);
         return cert(sa);
       } catch (e) {
@@ -43,7 +55,7 @@ function getCredential() {
     }
   }
 
-  console.warn('[FirebaseAdmin] No explicit service account key found. Falling back to ambient default credentials.');
+  console.log('[FirebaseAdmin] No explicit service account key configured; using Firestore client SDK sync.');
   return undefined;
 }
 
@@ -63,10 +75,13 @@ import { initializeApp as initClientApp, getApps as getClientApps } from 'fireba
 import { 
   getFirestore as getClientFirestore, 
   initializeFirestore as initClientFirestore, 
+  memoryLocalCache as clientMemoryLocalCache,
   setLogLevel as setClientLogLevel,
   doc as clientDoc, 
+  getDoc as clientGetDoc,
   setDoc as clientSetDoc, 
-  deleteDoc as clientDeleteDoc 
+  deleteDoc as clientDeleteDoc,
+  runTransaction as clientRunTransaction
 } from 'firebase/firestore';
 
 try {
@@ -80,6 +95,7 @@ const clientApp = getClientApps().length === 0
 let clientDbInstance: any;
 try {
   const clientOptions = {
+    localCache: clientMemoryLocalCache(),
     experimentalForceLongPolling: true,
     useFetchStreams: false
   };
@@ -94,6 +110,23 @@ try {
 
 export const clientDb = clientDbInstance;
 export const hasAdminCredentials = !!credential;
+
+export async function getOtaStoreDocFromFirestore(key: string): Promise<any | undefined> {
+  try {
+    if (credential && adminDb) {
+      const snap = await adminDb.collection('ota_app_store').doc(key).get();
+      return snap.exists ? snap.data()?.payload : undefined;
+    }
+    if (clientDb) {
+      const snap = await clientGetDoc(clientDoc(clientDb, 'ota_app_store', key));
+      return snap.exists() ? snap.data()?.payload : undefined;
+    }
+    return undefined;
+  } catch (err) {
+    console.warn(`[Firestore Cloud Sync] getOtaStoreDocFromFirestore(${key}) notice:`, err);
+    return undefined;
+  }
+}
 
 export async function syncOtaStoreDocToFirestore(key: string, payload: any): Promise<boolean> {
   try {
@@ -125,6 +158,47 @@ export async function syncOtaStoreDocToFirestore(key: string, payload: any): Pro
   } catch (err) {
     console.warn(`[Firestore Cloud Sync] syncOtaStoreDocToFirestore(${key}) notice:`, err);
     return false;
+  }
+}
+
+export async function updateOtaStoreListInFirestore<T = any>(
+  key: string,
+  mutator: (currentList: T[]) => T[]
+): Promise<T[] | null> {
+  const now = Date.now();
+  const normalizeList = (raw: any): T[] => {
+    if (Array.isArray(raw)) return raw.filter((i: any) => i !== null && i !== undefined);
+    if (raw && typeof raw === 'object') return Object.values(raw).filter((i: any) => i !== null && i !== undefined) as T[];
+    return [];
+  };
+
+  try {
+    if (credential && adminDb) {
+      const docRef = adminDb.collection('ota_app_store').doc(key);
+      const updated = await adminDb.runTransaction(async (tx) => {
+        const snap = await tx.get(docRef);
+        const current = snap.exists ? normalizeList(snap.data()?.payload) : [];
+        const next = JSON.parse(JSON.stringify(mutator([...current])));
+        tx.set(docRef, { payload: next, updatedAt: now });
+        return next;
+      });
+      return updated;
+    }
+    if (clientDb) {
+      const docRef = clientDoc(clientDb, 'ota_app_store', key);
+      const updated = await clientRunTransaction(clientDb, async (tx) => {
+        const snap = await tx.get(docRef);
+        const current = snap.exists() ? normalizeList(snap.data()?.payload) : [];
+        const next = JSON.parse(JSON.stringify(mutator([...current])));
+        tx.set(docRef, { payload: next, updatedAt: now });
+        return next;
+      });
+      return updated;
+    }
+    return null;
+  } catch (err) {
+    console.warn(`[Firestore Cloud Sync] updateOtaStoreListInFirestore(${key}) notice:`, err);
+    return null;
   }
 }
 
@@ -183,4 +257,5 @@ export async function deleteSchoolDocFromFirestore(schoolId: string): Promise<bo
 }
 
 export default appAdmin;
+
 

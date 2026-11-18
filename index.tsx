@@ -109,10 +109,10 @@ const App = () => {
         storage.onReady(onReadyCallback);
     }
 
-    // Fail-safe timeout: Always unblock UI after 300ms max
+    // Fail-safe timeout: Always unblock UI after 1200ms max
     const maxWaitTimer = setTimeout(() => {
         setIsStorageReady(true);
-    }, 300);
+    }, 1200);
 
     // Storage Listener for "Live Sync" Visualization
     const unsub = storage.subscribe((showIndicator = true) => {
@@ -152,33 +152,6 @@ const App = () => {
         setIsOnline(false);
       }
     }, 4000);
-
-    // Migration: Fix nested arrays in localStorage
-    try {
-        const teachersData = localStorage.getItem('ota_teachers_v3');
-        if (teachersData) {
-            const parsed = JSON.parse(teachersData);
-            const teachersList = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? Object.values(parsed) : []);
-            let migrated = false;
-            teachersList.forEach((t: any) => {
-                if (t && Array.isArray(t.availability)) {
-                    t.availability = Array.from({ length: 5 }).reduce((acc: any, _, day) => {
-                        acc[day] = Array.from({ length: 8 }).reduce((pAcc: any, _, period) => {
-                            pAcc[period] = 'AVAILABLE';
-                            return pAcc;
-                        }, {});
-                        return acc;
-                    }, {});
-                    migrated = true;
-                }
-            });
-            if (migrated) {
-                localStorage.setItem('ota_teachers_v3', JSON.stringify(teachersList));
-            }
-        }
-    } catch (e) {
-        console.error("Migration failed", e);
-    }
 
     return () => {
         window.removeEventListener('online', handleOnline);
@@ -425,10 +398,10 @@ const App = () => {
         {!showOtaSplash && !showAbout && !role && (
             <button 
                 onClick={() => setShowAbout(true)}
-                className="hidden sm:flex fixed bottom-6 right-6 z-[8000] bg-white text-slate-900 px-4 py-3 rounded-2xl font-bold text-xs shadow-xl border border-slate-200 hover:border-blue-400 hover:scale-105 active:scale-95 transition-all items-center gap-2 group"
+                className="hidden sm:flex fixed bottom-6 right-6 z-[8000] bg-white/75 backdrop-blur-xl backdrop-saturate-150 text-slate-800 px-4 py-2.5 rounded-2xl font-bold text-xs shadow-[0_12px_32px_-8px_rgba(37,99,235,0.16),inset_0_1px_1px_rgba(255,255,255,1)] border border-white ring-1 ring-slate-900/[0.06] hover:bg-white/95 hover:scale-[1.03] active:scale-95 transition-all items-center gap-2 group"
             >
-                <div className="w-6 h-6 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center transition-colors">
-                    <Info size={14}/> 
+                <div className="w-6 h-6 rounded-lg bg-blue-50/90 border border-blue-100 text-blue-600 flex items-center justify-center transition-colors">
+                    <Info size={13}/> 
                 </div>
                 About Pentric
             </button>

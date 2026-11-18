@@ -2,6 +2,7 @@ import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import { 
   getFirestore, 
   initializeFirestore,
+  memoryLocalCache,
   setLogLevel,
   Firestore, 
   doc, 
@@ -10,6 +11,8 @@ import {
   deleteDoc, 
   onSnapshot, 
   collection,
+  getDocs,
+  runTransaction,
   getDocFromServer
 } from 'firebase/firestore';
 import { 
@@ -17,7 +20,8 @@ import {
   Auth, 
   signOut, 
   onAuthStateChanged,
-  signInAnonymously
+  signInAnonymously,
+  signInWithCustomToken
 } from 'firebase/auth';
 import firebaseConfigJson from '../firebase-applet-config.json' with { type: 'json' };
 
@@ -55,7 +59,9 @@ try {
 const firestoreDatabaseId = firebaseConfigJson.firestoreDatabaseId;
 let db: Firestore;
 try {
+  // Strictly memory-only local cache so zero application data is persisted locally on any device
   const options = { 
+    localCache: memoryLocalCache(),
     experimentalForceLongPolling: true,
     useFetchStreams: false 
   };
@@ -116,13 +122,16 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Gracefully maintain Firebase Auth session
-if (typeof window !== 'undefined') {
-  onAuthStateChanged(auth, (user) => {
-    if (!user) {
-      signInAnonymously(auth).catch(() => {});
+export async function testConnection(): Promise<boolean> {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+    return true;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error('Please check your Firebase configuration.');
     }
-  });
+    return false;
+  }
 }
 
 export {
@@ -131,13 +140,16 @@ export {
   auth,
   doc,
   getDoc,
+  getDocs,
   setDoc,
   deleteDoc,
   onSnapshot,
   collection,
+  runTransaction,
   getDocFromServer,
   signOut,
   onAuthStateChanged,
-  signInAnonymously
+  signInAnonymously,
+  signInWithCustomToken
 };
 

@@ -11,15 +11,22 @@
     "test": "tsx scripts/test_regression.ts && tsx scripts/test_security_and_publication.ts && tsx scripts/test_auth_full_matrix.ts && tsx scripts/test_multi_instance_sync.ts",
     "preview": "vite preview"
   },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "dependencies": {
-    "@google/genai": "^1.35.0",
+    "@google/genai": "^3.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/bcryptjs": "^3.0.0",
     "@types/canvas-confetti": "^1.9.0",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^22.14.0",
     "@types/nodemailer": "^8.0.1",
     "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.0.0",
     "bcryptjs": "^3.0.3",
     "canvas-confetti": "^1.9.4",
     "esbuild": "^0.28.1",
@@ -39,14 +46,9 @@
     "recharts": "^3.10.1",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.11",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0",
     "xlsx": "^0.18.5"
   },
-  "devDependencies": {
-    "@types/node": "^22.14.0",
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^5.0.0",
-    "typescript": "~5.8.2",
-    "vite": "^6.2.0"
-  }
+  "devDependencies": {}
 }

@@ -25,25 +25,15 @@ async function runTeacherAuthE2ETest() {
   }
   console.log('  ✓ PASS: Verification code dispatched:', sendData.message);
 
-  // Read code from pending verifications in Firestore or server file
+  // Read code from pending verifications in Firestore
   let code = '';
-  try {
-    const snap = await getDoc(doc(clientDb, 'ota_app_store', 'ota_pending_verifications_v1'));
-    if (snap.exists() && Array.isArray(snap.data()?.payload)) {
-      const match = snap.data().payload.find((item: any) => item && item.email === testEmail);
-      if (match) code = match.code;
-    }
-  } catch {}
-
-  if (!code) {
-    // Read from data/pending_verifications.json
-    const fs = await import('fs');
-    const list = JSON.parse(fs.readFileSync('data/pending_verifications.json', 'utf8'));
-    const match = list.find((item: any) => item && item.email === testEmail);
+  const snap = await getDoc(doc(clientDb, 'ota_app_store', 'ota_pending_verifications_v1'));
+  if (snap.exists() && Array.isArray(snap.data()?.payload)) {
+    const match = snap.data().payload.find((item: any) => item && item.email === testEmail);
     if (match) code = match.code;
   }
 
-  if (!code) throw new Error('Could not locate generated verification code for test');
+  if (!code) throw new Error('Could not locate generated verification code in Firestore for test');
   console.log('  ✓ PASS: Found active verification code for test:', code);
 
   // 2. Complete teacher registration

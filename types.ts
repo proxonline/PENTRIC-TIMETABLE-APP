@@ -22,6 +22,8 @@ export interface StyleConfig {
   fridayRelaxation: boolean;
 }
 
+export type SolverStrategy = 'CONSTRAINED_FIRST' | 'BALANCED_INTERLEAVE' | 'TEACHER_SPREAD';
+
 export interface GeneratorConfig {
   goal: OptimizationGoal;
   forceSinglePeriods: boolean;
@@ -31,6 +33,7 @@ export interface GeneratorConfig {
   respectTeacherPreferences?: boolean;
   prioritizeCoreMorning?: boolean;
   classLayoutOnly?: boolean;
+  solverStrategy?: SolverStrategy;
 }
 
 export interface ClassAllocationSummary {
@@ -58,6 +61,8 @@ export interface ReasoningReport {
   completionRate: number; // %
   teacherPreferenceSatisfactionRate: number; // %
   morningCoreRatio: number; // %
+  teacherBalanceScore?: number; // 0 - 100 daily load evenness & gap minimization
+  unassignedTeacherSlots?: number; // count of lessons without faculty assigned
   bottlenecks: string[];
   recommendations: string[];
   summary: string;
@@ -281,6 +286,15 @@ export interface NotificationPreferences {
   emailNotifications?: boolean;
 }
 
+export type TeacherThemeId =
+  | 'white_blue'
+  | 'obsidian_purple'
+  | 'midnight_cyan'
+  | 'lavender_mist'
+  | 'emerald_mint'
+  | 'rose_quartz'
+  | 'amber_ivory';
+
 export interface Teacher {
   id: string;
   name: string;
@@ -289,6 +303,7 @@ export interface Teacher {
   recoveryCode: string;
   subjectsTaught: string[];
   assignedClasses: string[];
+  classSubjects?: Record<string, string[]>;
   availability: Record<number, Record<number, Availability>>;
   isCompleted: boolean;
   preferences?: NotificationPreferences;
@@ -301,6 +316,7 @@ export interface Teacher {
   mustChangePassword?: boolean;
   calendarToken?: string;
   darkMode?: boolean;
+  uiTheme?: TeacherThemeId;
   // Multi-school & Anti-Imposter Verification Fields
   schoolId?: string;
   emailVerified?: boolean;
@@ -308,6 +324,7 @@ export interface Teacher {
   approvalStatus?: 'APPROVED' | 'PENDING' | 'REJECTED';
   rejectionReason?: string;
   registeredAt?: number;
+  updatedAt?: number;
 }
 
 export interface TimetableCell {
