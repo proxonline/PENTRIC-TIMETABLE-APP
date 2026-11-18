@@ -17,5 +17,13 @@ services:
         sync: false
       - key: RESEND_FROM
         sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: BREVO_FROM
+        sync: false
+      - key: EMAIL_WEBHOOK_URL
+        sync: false
+      - key: EMAIL_WEBHOOK_SECRET
+        sync: false
       - key: FIREBASE_SERVICE_ACCOUNT_KEY
         sync: false

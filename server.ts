@@ -1748,7 +1748,7 @@ function buildEmailTemplate({
 </html>`;
 }
 
-// --- SECURE OUTBOUND EMAIL INFRASTRUCTURE (RESEND HTTPS + BOUNDED SMTP) ---
+// --- SECURE OUTBOUND EMAIL INFRASTRUCTURE (RESEND HTTPS + BREVO HTTPS + WEBHOOK RELAY + BOUNDED SMTP) ---
 async function sendEmailMessage({
   to,
   subject,
@@ -1761,7 +1761,7 @@ async function sendEmailMessage({
   html: string;
   text: string;
   fromName?: string;
-}): Promise<{ success: boolean; error?: string; transport?: 'resend' | 'smtp'; sender?: string }> {
+}): Promise<{ success: boolean; error?: string; transport?: 'resend' | 'brevo' | 'webhook' | 'smtp'; sender?: string }> {
   const resendApiKey = (process.env.RESEND_API_KEY || '').trim();
   const rawFrom = (process.env.RESEND_FROM || process.env.EMAIL_FROM || '').trim().replace(/^["']|["']$/g, '');
   const angleMatch = rawFrom.match(/<([^>\s]+@[^>\s]+)>/);
@@ -1770,6 +1770,15 @@ async function sendEmailMessage({
   const isPublicFreeMail = /@(gmail|yahoo|outlook|hotmail|live|aol|icloud)\.com$/i.test(candidateEmail);
   const hasVerifiedResendDomain = Boolean(resendApiKey && candidateEmail && !isPublicFreeMail);
   const resolvedResendEmail = hasVerifiedResendDomain ? candidateEmail : 'onboarding@resend.dev';
+
+  const brevoApiKey = (process.env.BREVO_API_KEY || '').trim();
+  const rawBrevoFrom = (process.env.BREVO_FROM || process.env.EMAIL_FROM || process.env.SMTP_USER || '').trim().replace(/^["']|["']$/g, '');
+  const brevoAngle = rawBrevoFrom.match(/<([^>\s]+@[^>\s]+)>/);
+  const brevoPlain = rawBrevoFrom.match(/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/);
+  const brevoSenderEmail = brevoAngle ? brevoAngle[1] : (brevoPlain ? rawBrevoFrom : '');
+
+  const webhookUrl = (process.env.EMAIL_WEBHOOK_URL || '').trim();
+  const webhookSecret = (process.env.EMAIL_WEBHOOK_SECRET || '').trim();
 
   const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
   const smtpUser = (process.env.SMTP_USER || '').trim();
@@ -1811,6 +1820,75 @@ async function sendEmailMessage({
     } catch (e: any) {
       console.warn(`[Email Dispatcher] Resend dispatch notice for ${to}: ${e?.message}`);
       return { success: false, error: e?.message || 'Resend email dispatch failed' };
+    }
+  };
+
+  const tryBrevo = async (): Promise<{ success: boolean; error?: string; transport?: 'brevo'; sender?: string }> => {
+    if (!brevoApiKey) return { success: false, error: 'BREVO_API_KEY not set' };
+    if (!brevoSenderEmail) {
+      return { success: false, error: 'BREVO_FROM (verified sender email) is required when using BREVO_API_KEY.' };
+    }
+    try {
+      const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'api-key': brevoApiKey,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          sender: { name: fromName, email: brevoSenderEmail },
+          to: [{ email: to }],
+          subject,
+          htmlContent: html,
+          textContent: text
+        }),
+        signal: AbortSignal.timeout(8000)
+      });
+      const data: any = await res.json().catch(() => ({}));
+      if (res.ok) {
+        console.log(`[Email Dispatcher] Email accepted by Brevo for ${to} (from: ${brevoSenderEmail})`);
+        return { success: true, transport: 'brevo', sender: brevoSenderEmail };
+      }
+      const errorMsg = data?.message || data?.code || `Brevo API returned status ${res.status}`;
+      console.warn(`[Email Dispatcher] Brevo API declined ${to}: ${errorMsg}`);
+      return { success: false, error: `Email delivery rejected by Brevo: ${errorMsg}` };
+    } catch (e: any) {
+      console.warn(`[Email Dispatcher] Brevo dispatch notice for ${to}: ${e?.message}`);
+      return { success: false, error: e?.message || 'Brevo email dispatch failed' };
+    }
+  };
+
+  const tryWebhook = async (): Promise<{ success: boolean; error?: string; transport?: 'webhook'; sender?: string }> => {
+    if (!webhookUrl) return { success: false, error: 'EMAIL_WEBHOOK_URL not set' };
+    try {
+      const res = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to,
+          subject,
+          html,
+          text,
+          fromName,
+          ...(webhookSecret ? { secret: webhookSecret } : {})
+        }),
+        signal: AbortSignal.timeout(10000)
+      });
+      const rawText = await res.text();
+      let data: any = {};
+      try { data = JSON.parse(rawText); } catch {}
+      if (res.ok && data?.success !== false) {
+        const sender = typeof data?.sender === 'string' ? data.sender : 'Gmail Relay';
+        console.log(`[Email Dispatcher] Email dispatched via HTTPS Webhook to ${to}`);
+        return { success: true, transport: 'webhook', sender };
+      }
+      const errorMsg = data?.error || `Webhook relay returned status ${res.status}`;
+      console.warn(`[Email Dispatcher] Webhook relay declined ${to}: ${errorMsg}`);
+      return { success: false, error: errorMsg };
+    } catch (e: any) {
+      console.warn(`[Email Dispatcher] Webhook relay notice for ${to}: ${e?.message}`);
+      return { success: false, error: e?.message || 'Email webhook relay failed' };
     }
   };
 
@@ -1860,46 +1938,65 @@ async function sendEmailMessage({
     }
   };
 
-  if (!resendApiKey && !hasSmtp) {
+  if (!resendApiKey && !brevoApiKey && !webhookUrl && !hasSmtp) {
     console.warn(`[Email Dispatcher] Outbound email credentials unconfigured for: ${to}`);
     return {
       success: false,
-      error: 'Email delivery service is not configured on this server. Set RESEND_API_KEY or SMTP_USER and SMTP_PASS in your environment.'
+      error: 'Email delivery service is not configured on this server. Set BREVO_API_KEY + BREVO_FROM, EMAIL_WEBHOOK_URL, RESEND_API_KEY (verified domain), or SMTP_USER + SMTP_PASS.'
     };
   }
 
-  // If Resend has a verified custom domain, try Resend first (reliable even where SMTP ports are blocked).
-  // Otherwise, when Resend is restricted to its sandbox sender (onboarding@resend.dev), prefer SMTP first
-  // so verification emails can reach any recipient address.
-  if (hasVerifiedResendDomain || !hasSmtp) {
+  const attemptErrors: string[] = [];
+
+  // 1. Resend with verified custom domain (HTTPS 443)
+  if (hasVerifiedResendDomain) {
+    const resResult = await tryResend();
+    if (resResult.success) return resResult;
+    if (resResult.error) attemptErrors.push(resResult.error);
+  }
+
+  // 2. Brevo HTTPS API (works on Render Free tier with a single verified Gmail address — no custom domain required)
+  if (brevoApiKey) {
+    const brevoResult = await tryBrevo();
+    if (brevoResult.success) return brevoResult;
+    if (brevoResult.error) attemptErrors.push(brevoResult.error);
+  }
+
+  // 3. HTTPS Webhook Mail Relay (e.g. Google Apps Script Gmail relay over HTTPS 443)
+  if (webhookUrl) {
+    const hookResult = await tryWebhook();
+    if (hookResult.success) return hookResult;
+    if (hookResult.error) attemptErrors.push(hookResult.error);
+  }
+
+  // 4. Direct SMTP (works on paid Render or hosts where ports 465/587 are open)
+  if (hasSmtp) {
+    const smtpResult = await trySmtp();
+    if (smtpResult.success) return smtpResult;
+    if (smtpResult.error) attemptErrors.push(smtpResult.error);
+  }
+
+  // 5. Sandbox Resend fallback (when no custom domain is verified — succeeds for owner test email, otherwise explains domain/relay options)
+  if (resendApiKey && !hasVerifiedResendDomain) {
     const resendResult = await tryResend();
     if (resendResult.success) return resendResult;
-
-    if (hasSmtp) {
-      const smtpResult = await trySmtp();
-      if (smtpResult.success) return smtpResult;
-      return { success: false, error: smtpResult.error || resendResult.error };
+    const isSandboxRestriction = /only send testing emails to your own email|verify a domain/i.test(resendResult.error || '');
+    if (isSandboxRestriction) {
+      return {
+        success: false,
+        error: `${resendResult.error} Alternatively (without buying a domain), set BREVO_API_KEY + BREVO_FROM or EMAIL_WEBHOOK_URL in Render Environment Variables for free HTTPS email delivery to any recipient.`
+      };
     }
-    return resendResult;
+    if (resendResult.error) attemptErrors.push(resendResult.error);
   }
 
-  // Prefer SMTP first when Resend is unverified/sandboxed
-  const smtpResult = await trySmtp();
-  if (smtpResult.success) return smtpResult;
-
-  if (resendApiKey) {
-    const resendResult = await tryResend();
-    if (resendResult.success) return resendResult;
-    return {
-      success: false,
-      error: `${smtpResult.error || 'SMTP delivery failed'}. Resend fallback also rejected external recipient because no custom domain is verified at resend.com/domains.`
-    };
-  }
-
-  return smtpResult;
+  return {
+    success: false,
+    error: attemptErrors[0] || 'Outbound email delivery failed.'
+  };
 }
 
-async function sendVerificationEmail(recipientEmail: string, code: string, recipientName?: string): Promise<{ success: boolean; error?: string; transport?: 'resend' | 'smtp'; sender?: string }> {
+async function sendVerificationEmail(recipientEmail: string, code: string, recipientName?: string): Promise<{ success: boolean; error?: string; transport?: 'resend' | 'brevo' | 'webhook' | 'smtp'; sender?: string }> {
   const digits = code.split('');
   const digitsHtml = digits.map(d => `
     <td align="center" style="padding: 0 4px;">
@@ -5213,6 +5310,8 @@ app.get('/api/developer/telemetry', (req, res) => {
     sseClients: sseClients.length,
     emailConfigured: {
       resend: Boolean((process.env.RESEND_API_KEY || '').trim()),
+      brevo: Boolean((process.env.BREVO_API_KEY || '').trim() && (process.env.BREVO_FROM || process.env.EMAIL_FROM || process.env.SMTP_USER || '').trim()),
+      webhook: Boolean((process.env.EMAIL_WEBHOOK_URL || '').trim()),
       smtp: Boolean((process.env.SMTP_USER || '').trim() && (process.env.SMTP_PASS || '').trim())
     },
     projectId: 'ota-smart-timetable',
